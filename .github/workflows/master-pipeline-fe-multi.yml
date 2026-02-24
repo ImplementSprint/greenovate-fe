@@ -139,7 +139,7 @@ jobs:
       fail-fast: false
       matrix:
         system: ${{ fromJson(needs.active-systems.outputs.active_systems_json) }}
-    uses: ImplementSprint/Central-Template/.github/workflows/front-end-workflow.yml@main
+    uses: ImplementSprint/central-workflow/.github/workflows/front-end-workflow.yml@main
     with:
       system-dir: ${{ matrix.system.dir }}
       system-name: ${{ matrix.system.name }}
@@ -180,7 +180,7 @@ jobs:
       fromJson(needs.active-systems.outputs.active_count) > 0 &&
       (needs.sonarcloud.result == 'success' || needs.sonarcloud.result == 'skipped') &&
       (needs.frontend.result == 'success' || needs.frontend.result == 'skipped')
-    uses: ImplementSprint/Central-Template/.github/workflows/versioning.yml@main
+    uses: ImplementSprint/central-workflow/.github/workflows/versioning.yml@main
     with:
       mode: test
 
@@ -199,7 +199,7 @@ jobs:
       fail-fast: false
       matrix:
         system: ${{ fromJson(needs.active-systems.outputs.active_systems_json) }}
-    uses: ImplementSprint/Central-Template/.github/workflows/vercel-deploy.yml@main
+    uses: ImplementSprint/central-workflow/.github/workflows/vercel-deploy.yml@main
     with:
       working-directory: ${{ matrix.system.dir }}
       environment: preview
@@ -223,7 +223,7 @@ jobs:
       fail-fast: false
       matrix:
         system: ${{ fromJson(needs.active-systems.outputs.active_systems_json) }}
-    uses: ImplementSprint/Central-Template/.github/workflows/vercel-deploy.yml@main
+    uses: ImplementSprint/central-workflow/.github/workflows/vercel-deploy.yml@main
     with:
       working-directory: ${{ matrix.system.dir }}
       environment: preview
@@ -243,7 +243,7 @@ jobs:
       fromJson(needs.active-systems.outputs.active_count) > 0 &&
       (needs.sonarcloud.result == 'success' || needs.sonarcloud.result == 'skipped') &&
       (needs.frontend.result == 'success' || needs.frontend.result == 'skipped')
-    uses: ImplementSprint/Central-Template/.github/workflows/production-gate.yml@main
+    uses: ImplementSprint/central-workflow/.github/workflows/production-gate.yml@main
     with:
       system-dir: ${{ needs.active-systems.outputs.active_label }}
       app-type: web
@@ -253,7 +253,7 @@ jobs:
     name: "Notify Pipeline Status"
     needs: [frontend, active-systems, deploy-test, deploy-uat]
     if: always()
-    uses: ImplementSprint/Central-Template/.github/workflows/notifications.yml@main
+    uses: ImplementSprint/central-workflow/.github/workflows/notifications.yml@main
     with:
       status: ${{ (needs.frontend.result == 'success' || needs.frontend.result == 'skipped') && 'success' || (needs.frontend.result == 'cancelled' && 'cancelled' || 'failure') }}
       system-dir: ${{ needs.active-systems.outputs.active_label }}
