@@ -45,7 +45,12 @@ export default [
     languageOptions: {
       globals: {
         ...globals.jest,
+        ...globals.node,
       },
+    },
+    rules: {
+      'no-console': 'off',
+      'no-unused-vars': 'off',
     },
   },
 
