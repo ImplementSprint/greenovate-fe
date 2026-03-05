@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "test": "jest --coverage",
-        "test:coverage": "jest --coverage",
+    "test:coverage": "jest --coverage",
     "test:watch": "jest --watch",
     "test:e2e": "tsx tests/e2e/selenium-e2e.ts",
     "test:e2e:firefox": "tsx tests/e2e/selenium-e2e.ts --browser=firefox",
