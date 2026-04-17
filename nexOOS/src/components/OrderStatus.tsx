@@ -1,8 +1,7 @@
 'use client';
 
 import React from 'react';
-import { motion } from 'motion/react';
-import { ChevronLeft, Package, Truck, CheckCircle2, MapPin, Clock, ShieldCheck, ArrowRight } from 'lucide-react';
+import { ChevronLeft, Package, Truck, CheckCircle2 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 
 const getDisplayOrderNumber = (order: { orderNumber?: string; txNo?: string; id: string; date: string }) =>

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useRef, useCallback } from 'react';
 import { Product, Branch, BranchInventory, Order, CartItem, User } from '../types';
 import {
   clearAccessToken,
@@ -18,7 +18,7 @@ interface AppContextType {
   setIsLoggedIn: (isLoggedIn: boolean) => void;
   user: User | null;
   setUser: (user: User | null) => void;
-  fetchUserProfile: (token: string) => Promise<void>;
+  fetchUserProfile: () => Promise<void>;
   cart: CartItem[];
   setCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
   selectedBranch: Branch | null;
@@ -92,6 +92,21 @@ const cartSnapshot = (items: CartItem[]) =>
     .sort()
     .join('|');
 
+function readStoredJson<T>(key: string, fallback: T): T {
+  const rawValue = localStorage.getItem(key);
+
+  if (!rawValue) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(rawValue) as T;
+  } catch (error) {
+    console.error(`Failed to parse localStorage value for ${key}:`, error);
+    return fallback;
+  }
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [view, setView] = useState('home');
   const [accountSubView, setAccountSubView] = useState<'profile' | 'addresses' | 'orders' | 'settings'>('profile');
@@ -113,51 +128,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const skipNextCartSyncRef = useRef(false);
   const initialLocalCartSnapshotRef = useRef('');
 
-  useEffect(() => {
-    const token = getAccessToken();
-    if (token) {
-      setIsLoggedIn(true);
-      fetchUserProfile(token);
-    }
-
-    const savedCart = localStorage.getItem(CART_STORAGE_KEY);
-    if (savedCart) {
-      const parsedCart = JSON.parse(savedCart) as CartItem[];
-      setCart(parsedCart);
-      initialLocalCartSnapshotRef.current = cartSnapshot(parsedCart);
-    }
-
-    setIsCartHydrated(true);
-
-    const savedBranch = localStorage.getItem('selectedBranch');
-    if (savedBranch) {
-      setSelectedBranch(JSON.parse(savedBranch));
-    }
-
-    const savedOrders = localStorage.getItem('orders');
-    if (savedOrders) {
-      setOrders(JSON.parse(savedOrders));
-    }
-
-    fetchBranches();
+  const handleLogout = useCallback(() => {
+    clearAccessToken();
+    fetch(buildApiUrl('/api/auth/logout'), {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {});
+    setIsLoggedIn(false);
+    setUser(null);
+    setCart([]);
+    localStorage.removeItem(CART_STORAGE_KEY);
+    setView('home');
+    setIsCartOpen(false);
+    setIsCartSyncReady(false);
+    syncedCartUserIdRef.current = null;
+    initialLocalCartSnapshotRef.current = '';
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
-  }, [cart]);
-
-  useEffect(() => {
-    if (selectedBranch) {
-      localStorage.setItem('selectedBranch', JSON.stringify(selectedBranch));
-      fetchBranchInventory(selectedBranch.id);
-    }
-  }, [selectedBranch]);
-
-  useEffect(() => {
-    localStorage.setItem('orders', JSON.stringify(orders));
-  }, [orders]);
-
-  const fetchBranches = async () => {
+  const fetchBranches = useCallback(async () => {
     try {
       const res = await fetch(buildApiUrl('/api/branches'));
       const data = await res.json();
@@ -165,9 +153,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Error fetching branches:', error);
     }
-  };
+  }, []);
 
-  const fetchBranchInventory = async (branchId: number) => {
+  const fetchBranchInventory = useCallback(async (branchId: number) => {
     try {
       const res = await fetch(buildApiUrl(`/api/branches/${branchId}/inventory`));
       const data = await res.json();
@@ -175,9 +163,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Error fetching inventory:', error);
     }
-  };
+  }, []);
 
-  const fetchUserProfile = async (token: string) => {
+  const fetchUserProfile = useCallback(async () => {
     try {
       const res = await fetchWithAuth('/api/auth/me');
       const data = await res.json();
@@ -193,9 +181,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Error fetching user profile:', error);
     }
-  };
+  }, [handleLogout]);
 
-  const persistCartToBackend = async (items: CartItem[]) => {
+  const persistCartToBackend = useCallback(async (items: CartItem[]) => {
     const res = await fetchWithAuth('/api/cart', {
       method: 'PUT',
       headers: {
@@ -213,7 +201,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const payload = await res.json().catch(() => null);
       throw new Error(payload?.error || 'Failed to sync cart.');
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const token = getAccessToken();
+    if (token) {
+      setIsLoggedIn(true);
+      fetchUserProfile();
+    }
+
+    const parsedCart = readStoredJson<CartItem[]>(CART_STORAGE_KEY, []);
+    setCart(parsedCart);
+    initialLocalCartSnapshotRef.current = cartSnapshot(parsedCart);
+
+    setIsCartHydrated(true);
+
+    setSelectedBranch(readStoredJson<Branch | null>('selectedBranch', null));
+
+    setOrders(readStoredJson<Order[]>('orders', []));
+
+    fetchBranches();
+  }, [fetchBranches, fetchUserProfile]);
+
+  useEffect(() => {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+  }, [cart]);
+
+  useEffect(() => {
+    if (selectedBranch) {
+      localStorage.setItem('selectedBranch', JSON.stringify(selectedBranch));
+      fetchBranchInventory(selectedBranch.id);
+    }
+  }, [fetchBranchInventory, selectedBranch]);
+
+  useEffect(() => {
+    localStorage.setItem('orders', JSON.stringify(orders));
+  }, [orders]);
 
   useEffect(() => {
     if (!isCartHydrated) {
@@ -279,7 +302,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       isCancelled = true;
     };
-  }, [cart, isCartHydrated, user?.id]);
+  }, [cart, isCartHydrated, persistCartToBackend, user?.id]);
 
   useEffect(() => {
     if (!user?.id || !isCartSyncReady) {
@@ -300,24 +323,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
 
     syncCart();
-  }, [cart, isCartSyncReady, user?.id]);
-
-  const handleLogout = () => {
-    clearAccessToken();
-    fetch(buildApiUrl('/api/auth/logout'), {
-      method: 'POST',
-      credentials: 'include',
-    }).catch(() => {});
-    setIsLoggedIn(false);
-    setUser(null);
-    setCart([]);
-    localStorage.removeItem(CART_STORAGE_KEY);
-    setView('home');
-    setIsCartOpen(false);
-    setIsCartSyncReady(false);
-    syncedCartUserIdRef.current = null;
-    initialLocalCartSnapshotRef.current = '';
-  };
+  }, [cart, isCartSyncReady, persistCartToBackend, user?.id]);
 
   const addToCart = (
     product: Product,

@@ -548,7 +548,7 @@ export default function Shop() {
                                 setView('login');
                               }
                             }}
-                            disabled={selectedBranch && stock === 0}
+                            disabled={Boolean(selectedBranch && stock === 0)}
                             className={`rounded-xl p-2 shadow-md transition-all hover:shadow-lg ${
                               selectedBranch && stock === 0
                                 ? 'cursor-not-allowed bg-slate-100 text-slate-300'

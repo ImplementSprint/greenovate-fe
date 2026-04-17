@@ -2,7 +2,7 @@
 
 import React, { useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User, Package, MapPin, LogOut, ChevronRight, Clock, CheckCircle2, Truck, X, Settings, Bell, Lock, Calendar, Phone, Mail, Camera, ArrowLeft, Trash2 } from 'lucide-react';
+import { User, Package, MapPin, LogOut, ChevronRight, Clock, CheckCircle2, X, Settings, Lock, Camera, ArrowLeft, Trash2 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import {
   ensureAccessToken,
@@ -13,18 +13,13 @@ import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { usePhilippineLocations } from '@/hooks/usePhilippineLocations';
 import { normalizeDateForInput, normalizeDateForStorage } from '@/lib/date';
 import { normalizePhilippinePhone, PH_PHONE_MESSAGE } from '@/lib/phone';
-
-const ADDRESS_STORAGE_PREFIX = '__addresses_json__:';
-
-type SavedAddress = {
-  fullName: string;
-  phoneNumber: string;
-  province: string;
-  city: string;
-  postalCode: string;
-  streetAddress: string;
-  label: 'Home' | 'Work';
-};
+import {
+  MAX_SAVED_ADDRESSES,
+  normalizeSavedAddresses,
+  parseSerializedAddresses,
+  SavedAddress,
+  stringifyAddresses,
+} from '@/lib/customer-addresses';
 
 const createEmptyAddress = (user?: { full_name?: string; phone?: string } | null): SavedAddress => ({
   fullName: user?.full_name || '',
@@ -39,59 +34,8 @@ const createEmptyAddress = (user?: { full_name?: string; phone?: string } | null
 const formatAddressPreview = (address: SavedAddress) =>
   [address.streetAddress, address.city, address.province, address.postalCode].filter(Boolean).join(', ');
 
-const parseAddresses = (
-  address?: string,
-  user?: { full_name?: string; phone?: string } | null
-): SavedAddress[] => {
-  if (!address) {
-    return [];
-  }
-
-  if (address.startsWith(ADDRESS_STORAGE_PREFIX)) {
-    try {
-      const parsed = JSON.parse(address.slice(ADDRESS_STORAGE_PREFIX.length));
-      if (Array.isArray(parsed)) {
-        if (parsed.length === 0) {
-          return [];
-        }
-
-        return parsed.map((entry) => {
-          const legacyLocation = typeof entry?.location === 'string' ? entry.location : '';
-          const [legacyProvince = '', legacyCity = ''] = legacyLocation.split(',').map((item: string) => item.trim());
-          const normalizedEntryPhone = normalizePhilippinePhone(entry?.phoneNumber || '');
-          const normalizedUserPhone = normalizePhilippinePhone(user?.phone || '');
-
-          return {
-            fullName: entry?.fullName || user?.full_name || '',
-            phoneNumber: normalizedEntryPhone || normalizedUserPhone || entry?.phoneNumber || user?.phone || '',
-            province: entry?.province || entry?.region || legacyProvince,
-            city: entry?.city || legacyCity,
-            postalCode: entry?.postalCode || '',
-            streetAddress: entry?.streetAddress || '',
-            label: entry?.label === 'Work' ? 'Work' : 'Home',
-          };
-        });
-      }
-    } catch (error) {
-      console.error('Failed to parse saved addresses:', error);
-    }
-  }
-
-  return [
-    {
-      ...createEmptyAddress(user),
-      streetAddress: address,
-    },
-  ];
-};
-
-const stringifyAddresses = (addresses: SavedAddress[]) =>
-  `${ADDRESS_STORAGE_PREFIX}${JSON.stringify(addresses)}`;
-
 const getDisplayOrderNumber = (order: { orderNumber?: string; txNo?: string; id: string; date: string }) =>
   order.id || order.orderNumber || (order.txNo ? `TXN-${order.txNo}` : `TXN-${new Date(order.date).getTime()}`);
-
-const MAX_SAVED_ADDRESSES = 4;
 
 export default function Account() {
   const { 
@@ -110,7 +54,9 @@ export default function Account() {
   const [makeAddressDefault, setMakeAddressDefault] = useState(false);
   const [addressValidationMessage, setAddressValidationMessage] = useState('');
   const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error' | null; message: string }>({ type: null, message: '' });
-  const [addressEntries, setAddressEntries] = useState<SavedAddress[]>(parseAddresses(user?.address, user));
+  const [addressEntries, setAddressEntries] = useState<SavedAddress[]>(
+    normalizeSavedAddresses(parseSerializedAddresses(user?.address, user), user)
+  );
   const [addressFormData, setAddressFormData] = useState<SavedAddress>(createEmptyAddress(user));
   const profileImageInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -133,7 +79,7 @@ export default function Account() {
 
   React.useEffect(() => {
     if (user) {
-      const parsedAddresses = parseAddresses(user.address, user);
+      const parsedAddresses = normalizeSavedAddresses(parseSerializedAddresses(user.address, user), user);
 
       setProfileData({
         fullName: user.full_name || '',
@@ -199,7 +145,7 @@ export default function Account() {
       } else {
         setSaveStatus({ type: 'error', message: data.error || 'Failed to update profile' });
       }
-    } catch (error) {
+    } catch {
       setSaveStatus({ type: 'error', message: 'An error occurred' });
     } finally {
       setIsSaving(false);
@@ -225,11 +171,10 @@ export default function Account() {
         return false;
       }
 
-      const normalizedAddresses = nextAddresses.map((entry) => ({
-        ...entry,
-        fullName: entry.fullName || profileData.fullName,
-        phoneNumber: normalizePhilippinePhone(entry.phoneNumber) || normalizedPhone || '',
-      }));
+      const normalizedAddresses = normalizeSavedAddresses(nextAddresses, {
+        full_name: profileData.fullName,
+        phone: normalizedPhone || null,
+      });
 
       const hasInvalidAddressPhone = normalizedAddresses.some((entry) => !normalizePhilippinePhone(entry.phoneNumber));
 
@@ -263,7 +208,7 @@ export default function Account() {
         return false;
       }
 
-      setAddressEntries(parseAddresses(cleanedAddressValue, data));
+      setAddressEntries(normalizeSavedAddresses(parseSerializedAddresses(cleanedAddressValue, data), data));
       setUser(data);
       setEditingAddressIndex(null);
       setIsAddressModalOpen(false);
@@ -272,7 +217,7 @@ export default function Account() {
       setSaveStatus({ type: 'success', message: successMessage });
       setTimeout(() => setSaveStatus({ type: null, message: '' }), 3000);
       return true;
-    } catch (error) {
+    } catch {
       setSaveStatus({ type: 'error', message: 'An error occurred' });
       return false;
     } finally {
@@ -448,7 +393,7 @@ export default function Account() {
                     profileImage: user?.profile_image || '',
                     profileImageTouched: false
                   });
-                  setAddressEntries(parseAddresses(user?.address, user));
+                  setAddressEntries(normalizeSavedAddresses(parseSerializedAddresses(user?.address, user), user));
                   setSaveStatus({ type: null, message: '' });
                   setIsEditingProfile(false);
                 }}
@@ -1357,7 +1302,7 @@ export default function Account() {
                         } else {
                           setPasswordStatus({ type: 'error', message: data.error || 'Failed to update password' });
                         }
-                      } catch (err) {
+                      } catch {
                         setPasswordStatus({ type: 'error', message: 'An error occurred. Please try again.' });
                       } finally {
                         setIsUpdatingPassword(false);

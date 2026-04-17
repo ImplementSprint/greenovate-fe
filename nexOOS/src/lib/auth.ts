@@ -1,7 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { NextResponse } from 'next/server';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 export const REFRESH_TOKEN_COOKIE_NAME = 'refresh_token';
 const ACCESS_TOKEN_EXPIRES_IN = '15m';
 const REFRESH_TOKEN_EXPIRES_IN = '7d';
@@ -11,14 +10,24 @@ type AuthPayload = {
   email: string;
 };
 
+function getJwtSecret() {
+  const secret = process.env.JWT_SECRET;
+
+  if (!secret) {
+    throw new Error('JWT_SECRET is not configured.');
+  }
+
+  return secret;
+}
+
 export function signAccessToken(payload: AuthPayload) {
-  return jwt.sign({ ...payload, tokenType: 'access' }, JWT_SECRET, {
+  return jwt.sign({ ...payload, tokenType: 'access' }, getJwtSecret(), {
     expiresIn: ACCESS_TOKEN_EXPIRES_IN,
   });
 }
 
 export function signRefreshToken(payload: AuthPayload) {
-  return jwt.sign({ ...payload, tokenType: 'refresh' }, JWT_SECRET, {
+  return jwt.sign({ ...payload, tokenType: 'refresh' }, getJwtSecret(), {
     expiresIn: REFRESH_TOKEN_EXPIRES_IN,
   });
 }
@@ -29,7 +38,7 @@ export function signToken(payload: AuthPayload) {
 
 export function verifyAccessToken(token: string) {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload & {
+    const decoded = jwt.verify(token, getJwtSecret()) as jwt.JwtPayload & {
       tokenType?: string;
     };
 
@@ -38,14 +47,14 @@ export function verifyAccessToken(token: string) {
     }
 
     return decoded;
-  } catch (error) {
+  } catch {
     return null;
   }
 }
 
 export function verifyRefreshToken(token: string) {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload & {
+    const decoded = jwt.verify(token, getJwtSecret()) as jwt.JwtPayload & {
       tokenType?: string;
     };
 
@@ -54,7 +63,7 @@ export function verifyRefreshToken(token: string) {
     }
 
     return decoded;
-  } catch (error) {
+  } catch {
     return null;
   }
 }

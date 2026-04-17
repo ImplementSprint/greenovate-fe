@@ -73,7 +73,7 @@ export default function Login() {
       } else {
         setError(data.error || 'Invalid credentials');
       }
-    } catch (error) {
+    } catch {
       setError('Something went wrong. Please try again.');
     } finally {
       setIsLoading(false);
@@ -161,7 +161,7 @@ export default function Login() {
       } else {
         setResetStatus({ type: 'error', message: data.error || 'Failed to update password' });
       }
-    } catch (err) {
+    } catch {
       setResetStatus({ type: 'error', message: 'An error occurred. Please try again.' });
     } finally {
       setIsResetting(false);
@@ -193,7 +193,7 @@ export default function Login() {
       } else {
         setResetStatus({ type: 'error', message: data.error || 'Failed to resend code' });
       }
-    } catch (err) {
+    } catch {
       setResetStatus({ type: 'error', message: 'Unable to resend code right now.' });
     } finally {
       setIsResetting(false);

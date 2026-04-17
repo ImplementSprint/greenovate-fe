@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronLeft, MapPin, CreditCard, CheckCircle2, ShoppingBag, Truck, ShieldCheck, ArrowRight, X, Wallet, Banknote } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
@@ -10,71 +10,15 @@ import { buildApiUrl } from '@/lib/api';
 import { normalizePhilippinePhone, PH_PHONE_MESSAGE } from '@/lib/phone';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { usePhilippineLocations } from '@/hooks/usePhilippineLocations';
-
-const ADDRESS_STORAGE_PREFIX = '__addresses_json__:';
-
-type SavedAddress = {
-  fullName: string;
-  phoneNumber: string;
-  province: string;
-  city: string;
-  postalCode: string;
-  streetAddress: string;
-  label: 'Home' | 'Work';
-};
-
-const parseSavedAddresses = (
-  address?: string,
-  user?: { full_name?: string; phone?: string } | null
-): SavedAddress[] => {
-  if (!address) {
-    return [];
-  }
-
-  if (address.startsWith(ADDRESS_STORAGE_PREFIX)) {
-    try {
-      const parsed = JSON.parse(address.slice(ADDRESS_STORAGE_PREFIX.length));
-      if (Array.isArray(parsed)) {
-        return parsed.map((entry) => {
-          const legacyLocation = typeof entry?.location === 'string' ? entry.location : '';
-          const [legacyProvince = '', legacyCity = ''] = legacyLocation.split(',').map((item: string) => item.trim());
-
-          return {
-            fullName: entry?.fullName || user?.full_name || '',
-            phoneNumber: entry?.phoneNumber || user?.phone || '',
-            province: entry?.province || entry?.region || legacyProvince,
-            city: entry?.city || legacyCity,
-            postalCode: entry?.postalCode || '',
-            streetAddress: entry?.streetAddress || '',
-            label: entry?.label === 'Work' ? 'Work' : 'Home',
-          };
-        });
-      }
-    } catch (error) {
-      console.error('Failed to parse saved addresses:', error);
-    }
-  }
-
-  return address
-    ? [
-        {
-          fullName: user?.full_name || '',
-          phoneNumber: user?.phone || '',
-          province: '',
-          city: '',
-          postalCode: '',
-          streetAddress: address,
-          label: 'Home',
-        },
-      ]
-    : [];
-};
+import {
+  MAX_SAVED_ADDRESSES,
+  parseSerializedAddresses,
+  SavedAddress,
+  stringifyAddresses,
+} from '@/lib/customer-addresses';
 
 const formatSavedAddress = (address: SavedAddress) =>
   [address.streetAddress, address.city, address.province].filter(Boolean).join(', ');
-
-const stringifyAddresses = (addresses: SavedAddress[]) =>
-  `${ADDRESS_STORAGE_PREFIX}${JSON.stringify(addresses)}`;
 
 const formatDeliveryAddress = (info: {
   address: string;
@@ -102,8 +46,6 @@ type AppliedPromo = {
   minSubtotal: number;
   maxDiscount?: number | null;
 };
-
-const MAX_SAVED_ADDRESSES = 4;
 
 const createEmptyCheckoutAddress = (user?: { full_name?: string; phone?: string } | null): SavedAddress => ({
   fullName: user?.full_name || '',
@@ -162,7 +104,7 @@ export default function Checkout() {
   const [selectedSavedAddressIndex, setSelectedSavedAddressIndex] = useState<number | null>(null);
   const [isAddressPickerOpen, setIsAddressPickerOpen] = useState(false);
   const [addressPickerView, setAddressPickerView] = useState<'list' | 'form'>('list');
-  const [checkoutAddresses, setCheckoutAddresses] = useState<SavedAddress[]>(() => parseSavedAddresses(user?.address, user));
+  const [checkoutAddresses, setCheckoutAddresses] = useState<SavedAddress[]>(() => parseSerializedAddresses(user?.address, user));
   const [checkoutAddressForm, setCheckoutAddressForm] = useState<SavedAddress>(() => createEmptyCheckoutAddress(user));
   const [checkoutMakeDefault, setCheckoutMakeDefault] = useState(false);
   const [isProvincePickerOpen, setIsProvincePickerOpen] = useState(false);
@@ -182,7 +124,7 @@ export default function Checkout() {
   const discountAmount = appliedPromo?.discountAmount ?? 0;
   const orderTotal = Math.max(0, cartTotal + deliveryFee - discountAmount);
 
-  const applySavedAddress = (address: SavedAddress) => {
+  const applySavedAddress = useCallback((address: SavedAddress) => {
     setShippingInfo({
       fullName: address.fullName || user?.full_name || '',
       phone: address.phoneNumber || user?.phone || '',
@@ -192,7 +134,7 @@ export default function Checkout() {
       postalCode: address.postalCode || '',
     });
     setShippingError('');
-  };
+  }, [user?.full_name, user?.phone]);
 
   const persistCheckoutAddresses = async (nextAddresses: SavedAddress[]) => {
     if (!user) {
@@ -223,7 +165,7 @@ export default function Checkout() {
     }
 
     setUser(data);
-    setCheckoutAddresses(parseSavedAddresses(data.address, data));
+    setCheckoutAddresses(parseSerializedAddresses(data.address, data));
     return true;
   };
 
@@ -253,7 +195,7 @@ export default function Checkout() {
   };
 
   React.useEffect(() => {
-    const parsedAddresses = parseSavedAddresses(user?.address, user);
+    const parsedAddresses = parseSerializedAddresses(user?.address, user);
 
     setCheckoutAddresses(parsedAddresses);
     setCheckoutAddressForm(createEmptyCheckoutAddress(user));
@@ -275,7 +217,7 @@ export default function Checkout() {
       fullName: user?.full_name || prev.fullName,
       phone: user?.phone || prev.phone,
     }));
-  }, [user?.address, user?.full_name, user?.phone]);
+  }, [applySavedAddress, user]);
 
   React.useEffect(() => {
     const address = shippingInfo.address.trim();
