@@ -21,18 +21,19 @@ WORKDIR /app
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-# Copy necessary files
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/next.config.js ./next.config.js
+# Set environment variables
+ENV PORT=3000
+ENV NODE_ENV=production
+ENV HOSTNAME="0.0.0.0"
+
+# Copy the standalone output and static assets
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 # Switch to non-root user
 USER nextjs
 
 EXPOSE 3000
 
-ENV PORT=3000
-ENV NODE_ENV=production
-
-CMD ["npm", "start"]
+CMD ["node", "server.js"]
