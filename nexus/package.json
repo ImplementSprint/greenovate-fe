@@ -58,6 +58,9 @@
   "overrides": {
     "postcss": "^8.5.10",
     "http-proxy-agent": "^7.0.0",
-    "cross-spawn": "^7.0.5"
+    "cross-spawn": "^7.0.5",
+    "glob": "^11.1.0",
+    "minimatch": "^10.2.3",
+    "tar": "^7.5.11"
   }
 }
