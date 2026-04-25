@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "jest --testPathPattern=src/utils",
+    "test": "jest",
     "test:smoke": "jest --testPathPattern=tests/smoke --testEnvironment=node",
     "test:security": "jest --testPathPattern=tests/security --testEnvironment=node",
     "test:e2e": "jest --testPathPattern=tests/e2e --testEnvironment=node --runInBand",
