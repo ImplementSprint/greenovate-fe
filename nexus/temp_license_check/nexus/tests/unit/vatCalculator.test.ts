@@ -1,4 +1,4 @@
-import { calculateReceiptVAT } from '../../src/utils/vatCalculator';
+import { calculateReceiptVAT } from './vatCalculator';
 
 
 describe('VAT Calculation Service (POS-008)', () => {
