@@ -11,7 +11,7 @@ const customJestConfig = {
   collectCoverage: true,
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'json-summary'],
-  testPathIgnorePatterns: ['/node_modules/', '/tests/e2e/'],
+  testPathIgnorePatterns: ['/node_modules/', '\\.spec\\.ts$'],
 };
 
 // createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async
