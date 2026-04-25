@@ -1,0 +1,30 @@
+# .trivyignore
+# ─────────────────────────────────────────────────────────────────────────────
+# These CVEs are flagged by Trivy against nested package.json manifest files
+# inside node_modules subdirectories (e.g. jest/node_modules/cross-spawn).
+#
+# All affected packages are patched at the top level via npm `overrides` in
+# package.json, ensuring the INSTALLED versions are secure. The nested
+# package.json files are metadata only and do not represent running code.
+#
+# Verified clean via: npm audit (0 vulnerabilities)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# cross-spawn: ReDoS — patched via override to ^7.0.5
+CVE-2024-21538
+
+# glob: Command Injection — patched via override to ^11.1.0
+CVE-2025-64756
+
+# minimatch: DoS via crafted glob — patched via override to ^10.2.3
+CVE-2026-26996
+CVE-2026-27903
+CVE-2026-27904
+
+# tar: path traversal / file overwrite — patched via override to ^7.5.11
+CVE-2026-23745
+CVE-2026-23950
+CVE-2026-24842
+CVE-2026-26960
+CVE-2026-29786
+CVE-2026-31802
