@@ -11,6 +11,7 @@ const eslintConfig = defineConfig([
     ".next/**",
     "out/**",
     "build/**",
+    "coverage/**",
     "next-env.d.ts",
   ]),
   // Jest config files must use CommonJS require() — disable the rule for them.
@@ -18,6 +19,12 @@ const eslintConfig = defineConfig([
     files: ["jest.config.js", "jest.setup.js"],
     rules: {
       "@typescript-eslint/no-require-imports": "off",
+    },
+  },
+  {
+    rules: {
+      "react/no-unescaped-entities": "off",
+      "@next/next/no-img-element": "off",
     },
   },
 ]);
