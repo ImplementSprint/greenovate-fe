@@ -14,9 +14,9 @@ name: "Master Pipeline — FE"
 
 on:
   push:
-    branches: [test, uat, main]
+    branches: [test, uat, main, nexus]
   pull_request:
-    branches: [test, uat, main]
+    branches: [test, uat, main, nexus]
   workflow_dispatch:
     inputs:
       pipeline_mode:
