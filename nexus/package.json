@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "jest",
+    "test": "jest --testPathPattern=tests/unit",
     "test:smoke": "jest --testPathPattern=tests/smoke --testEnvironment=node",
     "test:security": "jest --testPathPattern=tests/security --testEnvironment=node",
     "test:e2e": "jest --testPathPattern=tests/e2e --testEnvironment=node --runInBand",
@@ -16,7 +16,8 @@
     "test:pact:publish": "node scripts/publish-pacts.js",
     "test:load": "k6 run --out influxdb=http://localhost:8086/k6 tests/k6/load-test.js",
     "test:load:simple": "k6 run tests/k6/load-test.js",
-    "test:integration": "jest --testPathPattern=tests/integration --testEnvironment=node --runInBand"
+    "test:integration": "jest --testPathPattern=tests/integration --testEnvironment=node --runInBand",
+    "test:all": "jest"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

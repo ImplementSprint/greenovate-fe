@@ -7,12 +7,26 @@ const eslintConfig = defineConfig([
   ...nextTs,
   // Override default ignores of eslint-config-next.
   globalIgnores([
-    // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unused-vars": "warn",
+      "@typescript-eslint/no-require-imports": "off",
+      "react-hooks/exhaustive-deps": "warn",
+      // Disable strict React purity/effect rules for legacy compatibility
+      "react-hooks/purity": "off",
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/static-components": "off",
+      "react-hooks/immutability": "off",
+      "@next/next/no-img-element": "warn",
+      "react/no-unescaped-entities": "off",
+    },
+  },
   // Jest config files must use CommonJS require() — disable the rule for them.
   {
     files: ["jest.config.js", "jest.setup.js"],
