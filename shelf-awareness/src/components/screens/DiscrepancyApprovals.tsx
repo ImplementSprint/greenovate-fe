@@ -36,7 +36,6 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -534,9 +533,10 @@ export function DiscrepancyApprovals() {
     }
   };
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     setIsExportingExcel(true);
     try {
+      const ExcelJS = await import("exceljs");
       const overviewRows = [
         { metric: "Pending", value: statusCounts.pending ?? 0 },
         {
@@ -594,27 +594,41 @@ export function DiscrepancyApprovals() {
         defects: row.defects,
       }));
 
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(
-        workbook,
-        XLSX.utils.json_to_sheet(overviewRows),
-        "Overview",
-      );
-      XLSX.utils.book_append_sheet(
-        workbook,
-        XLSX.utils.json_to_sheet(discrepancyRows),
-        "Discrepancies",
-      );
-      XLSX.utils.book_append_sheet(
-        workbook,
-        XLSX.utils.json_to_sheet(supplierRows),
-        "Supplier Defects",
-      );
+      const workbook = new ExcelJS.Workbook();
 
-      XLSX.writeFile(
-        workbook,
-        `discrepancies-report-${exportTimestamp}.xlsx`,
-      );
+      const appendWorksheet = (
+        title: string,
+        rows: Array<Record<string, string | number>>,
+      ) => {
+        const worksheet = workbook.addWorksheet(title);
+        if (rows.length === 0) {
+          worksheet.addRow(["No data"]);
+          return;
+        }
+
+        const headers = Object.keys(rows[0]);
+        worksheet.columns = headers.map((header) => ({
+          header,
+          key: header,
+          width: Math.max(header.length + 2, 16),
+        }));
+        rows.forEach((row) => worksheet.addRow(row));
+      };
+
+      appendWorksheet("Overview", overviewRows);
+      appendWorksheet("Discrepancies", discrepancyRows);
+      appendWorksheet("Supplier Defects", supplierRows);
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = `discrepancies-report-${exportTimestamp}.xlsx`;
+      anchor.click();
+      URL.revokeObjectURL(downloadUrl);
 
       toast.success("Excel exported", {
         description:
