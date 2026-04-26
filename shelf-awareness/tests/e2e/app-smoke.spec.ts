@@ -1,12 +1,13 @@
 import { expect, test } from "@playwright/test";
 
-test("login landing page renders shelf awareness text", async ({
+test("login landing page renders stable login UI", async ({
   page,
 }) => {
   await page.goto("/");
 
-  await expect(page.getByText("Shelf Awareness").first()).toBeVisible();
+  await expect(page).toHaveURL(/\/login$/);
   await expect(
-    page.getByText("Authorized Personnel Only"),
+    page.getByRole("heading", { name: "Admin Portal Login" }),
   ).toBeVisible();
+  await expect(page.getByLabel("Employee ID")).toBeVisible();
 });
