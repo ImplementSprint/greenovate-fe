@@ -8,8 +8,12 @@ const customJestConfig = {
   testEnvironment: "jest-environment-jsdom",
   roots: ["<rootDir>/tests"],
   setupFilesAfterEnv: ["<rootDir>/jest.setup.js"],
-  testPathIgnorePatterns: ["/node_modules/", "/.next/"],
+  testPathIgnorePatterns: ["/node_modules/", "/.next/", "<rootDir>/tests/e2e/"],
   modulePathIgnorePatterns: ["<rootDir>/.next/"],
+  moduleNameMapper: {
+    "^@/(.*)$": "<rootDir>/src/$1",
+  },
+  coverageReporters: ["json-summary", "text", "lcov"],
   collectCoverage: false,
 };
 

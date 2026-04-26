@@ -1229,13 +1229,13 @@ export function InboundProcurement() {
                 {false && supplierScorecard && (
                   <div
                     className={`text-sm mt-2 ${
-                      supplierScorecard.reliability_score < 70
+                      (supplierScorecard?.reliability_score ?? 0) < 70
                         ? "text-red-600"
                         : "text-green-600"
                     }`}
                   >
                     Supplier Scorecard — Reliability:{" "}
-                    {supplierScorecard.reliability_score}%
+                    {supplierScorecard?.reliability_score ?? 0}%
                   </div>
                 )}
 
