@@ -533,10 +533,50 @@ export function DiscrepancyApprovals() {
     }
   };
 
+  const toCsvValue = (value: string | number) => {
+    const normalized = String(value ?? "");
+    if (/[",\n]/.test(normalized)) {
+      return `"${normalized.replace(/"/g, '""')}"`;
+    }
+
+    return normalized;
+  };
+
+  const buildCsvContent = (
+    title: string,
+    rows: Array<Record<string, string | number>>,
+  ) => {
+    if (rows.length === 0) {
+      return `${title}\nNo data`;
+    }
+
+    const headers = Object.keys(rows[0]);
+    const csvRows = [
+      title,
+      headers.join(","),
+      ...rows.map((row) =>
+        headers.map((header) => toCsvValue(row[header] ?? "")).join(","),
+      ),
+    ];
+
+    return csvRows.join("\n");
+  };
+
+  const triggerCsvDownload = (sections: string[], filename: string) => {
+    const blob = new Blob([sections.join("\n\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const downloadUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = downloadUrl;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(downloadUrl);
+  };
+
   const handleExportExcel = async () => {
     setIsExportingExcel(true);
     try {
-      const ExcelJS = await import("exceljs");
       const overviewRows = [
         { metric: "Pending", value: statusCounts.pending ?? 0 },
         {
@@ -594,48 +634,21 @@ export function DiscrepancyApprovals() {
         defects: row.defects,
       }));
 
-      const workbook = new ExcelJS.Workbook();
+      triggerCsvDownload(
+        [
+          buildCsvContent("Overview", overviewRows),
+          buildCsvContent("Discrepancies", discrepancyRows),
+          buildCsvContent("Supplier Defects", supplierRows),
+        ],
+        `discrepancies-report-${exportTimestamp}.csv`,
+      );
 
-      const appendWorksheet = (
-        title: string,
-        rows: Array<Record<string, string | number>>,
-      ) => {
-        const worksheet = workbook.addWorksheet(title);
-        if (rows.length === 0) {
-          worksheet.addRow(["No data"]);
-          return;
-        }
-
-        const headers = Object.keys(rows[0]);
-        worksheet.columns = headers.map((header) => ({
-          header,
-          key: header,
-          width: Math.max(header.length + 2, 16),
-        }));
-        rows.forEach((row) => worksheet.addRow(row));
-      };
-
-      appendWorksheet("Overview", overviewRows);
-      appendWorksheet("Discrepancies", discrepancyRows);
-      appendWorksheet("Supplier Defects", supplierRows);
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
-      const downloadUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = downloadUrl;
-      anchor.download = `discrepancies-report-${exportTimestamp}.xlsx`;
-      anchor.click();
-      URL.revokeObjectURL(downloadUrl);
-
-      toast.success("Excel exported", {
+      toast.success("CSV exported", {
         description:
-          "The discrepancies workbook has been downloaded.",
+          "The discrepancies report has been downloaded.",
       });
     } catch (err) {
-      toast.error("Excel export failed", {
+      toast.error("CSV export failed", {
         description:
           err instanceof Error
             ? err.message
@@ -675,8 +688,8 @@ export function DiscrepancyApprovals() {
           >
             <Download className="w-4 h-4 mr-2" />
             {isExportingExcel
-              ? "Exporting Excel..."
-              : "Export Excel"}
+              ? "Exporting CSV..."
+              : "Export CSV"}
           </Button>
           <div className="relative">
             <Search className="w-4 h-4 text-[#9CA3AF] absolute left-3 top-1/2 -translate-y-1/2" />
