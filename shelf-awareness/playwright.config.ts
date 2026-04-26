@@ -8,8 +8,9 @@ const bundledExecutableOverride = [
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-].find((candidate): candidate is string =>
-  Boolean(candidate) && existsSync(candidate),
+].find(
+  (candidate): candidate is string =>
+    typeof candidate === "string" && existsSync(candidate),
 );
 
 export default defineConfig({
