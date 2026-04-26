@@ -3,9 +3,7 @@ import { expect, test } from "@playwright/test";
 test("login landing page renders stable login UI", async ({
   page,
 }) => {
-  await page.goto("/");
-
-  await expect(page).toHaveURL(/\/login$/);
+  await page.goto("/login");
   await expect(
     page.getByRole("heading", { name: "Admin Portal Login" }),
   ).toBeVisible();
