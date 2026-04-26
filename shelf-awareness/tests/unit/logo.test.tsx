@@ -8,4 +8,13 @@ describe("Logo", () => {
     expect(screen.getByText("Shelf Awareness")).toBeInTheDocument();
     expect(screen.getByText("Medical Logistics Portal")).toBeInTheDocument();
   });
+
+  it("omits the subtitle for the small variant", () => {
+    render(<Logo size="small" />);
+
+    expect(screen.getByText("Shelf Awareness")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Medical Logistics Portal"),
+    ).not.toBeInTheDocument();
+  });
 });
