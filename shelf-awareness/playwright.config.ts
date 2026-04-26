@@ -1,24 +1,40 @@
-import { defineConfig } from "@playwright/test";
+import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
+const port = Number(process.env.PORT ?? 3000);
+const baseURL =
+  process.env.E2E_BASE_URL ??
+  `http://127.0.0.1:${port}`;
 const useExternalTarget = Boolean(process.env.E2E_BASE_URL);
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testMatch: /.*\.spec\.ts/,
-  timeout: 60_000,
+  timeout: 30_000,
+  expect: {
+    timeout: 10_000,
+  },
   fullyParallel: false,
+  retries: process.env.CI ? 2 : 0,
+  workers: 1,
   reporter: "list",
   use: {
     baseURL,
-    headless: true,
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
   },
   webServer: useExternalTarget
     ? undefined
     : {
-        command: "npm run dev -- --hostname 127.0.0.1 --port 3000",
+        command:
+          `npm run build && npm run start -- --hostname 127.0.0.1 --port ${port}`,
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
       },
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+    },
+  ],
 });
