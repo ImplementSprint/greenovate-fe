@@ -4,7 +4,11 @@ import { chromium, firefox, webkit } from 'playwright';
 
 type BrowserName = 'chromium' | 'firefox' | 'webkit';
 
-const LOCAL_PAGE_MARKERS = ['Get started by editing', 'To get started, edit the page.tsx file.'];
+const LOCAL_PAGE_MARKERS = [
+  "Admin Portal Login",
+  "Shelf Awareness",
+  "Authorized Personnel Only",
+];
 
 function hasExpectedLandingMarker(text: string): boolean {
   return LOCAL_PAGE_MARKERS.some((marker) => text.includes(marker));
