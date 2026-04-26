@@ -1,62 +1,31 @@
-# FE Multi Template Repo Starter
+# FE Multi Template Repo
 
-Starter for a multi-app Next.js monorepo that calls the central FE Multi pipeline.
+This repository hosts multiple frontend systems that share the FE multi-template CI/CD pipeline.
 
-## Includes
-- `.github/workflows/master-pipeline-fe-multi.yml`
-- Three sample Next.js apps:
-  - `System-1-Web`
-  - `System-2-Web`
-  - `System-3-Web`
-- Per-app ESLint, Jest, Docker, TypeScript, and simple UI test
-- Root `sonar-project.properties` for multi-app scan
+## Shelf Awareness
 
-## Require repository variables
+- System folder: `shelf-awareness`
+- Vercel project secret: `VERCEL_PROJECT_ID_SHELF_AWARENESS`
 
-`FE_MULTI_SYSTEMS_JSON`
+## Required Repository Variable
 
-Example:
+Set `FE_MULTI_SYSTEMS_JSON` using the shape shown in `FE_MULTI_SYSTEMS_JSON.example.json`.
 
-```json
-[
-  {
-    "name": "System 1",
-    "dir": "System-1-Web",
-    "image": "system-1-web",
-    "vercel_project_secret": "VERCEL_PROJECT_ID_SYSTEM_1"
-  },
-  {
-    "name": "System 2",
-    "dir": "System-2-Web",
-    "image": "system-2-web",
-    "vercel_project_secret": "VERCEL_PROJECT_ID_SYSTEM_2"
-  },
-  {
-    "name": "System 3",
-    "dir": "System-3-Web",
-    "image": "system-3-web",
-    "vercel_project_secret": "VERCEL_PROJECT_ID_SYSTEM_3"
-  }
-]
-```
+## Required Repository Secrets
 
-## Required repository secrets
 - `VERCEL_TOKEN`
 - `VERCEL_ORG_ID`
-- Vercel project ID secrets referenced in `FE_MULTI_SYSTEMS_JSON`
+- `VERCEL_PROJECT_ID_SHELF_AWARENESS`
 - `SONAR_TOKEN`
 - `SONAR_ORGANIZATION`
 - `SONAR_PROJECT_KEY`
-- `SLACK_WEBHOOK_URL`
-- `DISCORD_WEBHOOK_URL`
 
-## Local check
-
-Run per app:
+## Local Validation
 
 ```bash
-cd System-1-Web && npm install && npm run lint && npm run test && npm run build
+cd shelf-awareness
+npm install
+npm run lint
+npm run test
+npm run build
 ```
-
-
-test
