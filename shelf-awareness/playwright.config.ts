@@ -1,6 +1,5 @@
 import { defineConfig } from "@playwright/test";
 
-const port = 3000;
 const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const useExternalTarget = Boolean(process.env.E2E_BASE_URL);
 
