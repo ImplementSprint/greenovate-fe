@@ -1,0 +1,8 @@
+[
+  {
+    "name": "Shelf Awareness",
+    "dir": "shelf-awareness",
+    "image": "shelf-awareness-web",
+    "vercel_project_secret": "VERCEL_PROJECT_ID_SHELF_AWARENESS"
+  }
+]
