@@ -1,6 +1,10 @@
 node_modules
 .next
 coverage
-.git
+pacts
 .github
+tests
+scripts
+README.md
+.env.local
 npm-debug.log*
