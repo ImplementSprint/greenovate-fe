@@ -11,8 +11,12 @@ const customJestConfig = {
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
   },
-  coverageReporters: ["json-summary", "text", "lcov"],
   collectCoverage: true,
+  collectCoverageFrom: [
+    "src/utils/**/*.{ts,tsx}",
+    "!src/**/*.d.ts",
+  ],
+  coverageReporters: ["json-summary", "text", "lcov"],
 };
 
 module.exports = createJestConfig(customJestConfig);
