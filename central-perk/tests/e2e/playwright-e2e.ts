@@ -68,7 +68,7 @@ async function waitForServer(url: string, timeoutMs = 45_000): Promise<void> {
 }
 
 async function main() {
-  const port = process.env.PORT || '4173';
+  const port = process.env.PORT || '3000';
   const baseUrl = process.env.E2E_BASE_URL || `http://127.0.0.1:${port}`;
   const browserName = resolveBrowser(process.env.E2E_BROWSER || 'chromium');
   const isExternalTarget = Boolean(process.env.E2E_BASE_URL);
