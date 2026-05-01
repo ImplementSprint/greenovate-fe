@@ -5,10 +5,10 @@ import { chromium, firefox, webkit } from 'playwright';
 type BrowserName = 'chromium' | 'firefox' | 'webkit';
 
 const LOCAL_PAGE_MARKERS = [
-  'Central Perk',
-  'Coffee',
-  'Friends',
-  'Menu',
+  'Welcome Back',
+  'Log In',
+  'Customer',
+  'Loading CentralPerk',
 ];
 
 function hasExpectedLandingMarker(text: string): boolean {
