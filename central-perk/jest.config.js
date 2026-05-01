@@ -7,6 +7,9 @@ const createJestConfig = nextJest({
 const customJestConfig = {
   testEnvironment: 'jest-environment-jsdom',
   roots: ['<rootDir>/tests', '<rootDir>/src'],
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/src/$1',
+  },
   testPathIgnorePatterns: ['/node_modules/', '/.next/'],
   modulePathIgnorePatterns: ['<rootDir>/.next/'],
   collectCoverage: true,
