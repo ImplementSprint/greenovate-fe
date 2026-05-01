@@ -10,15 +10,14 @@
     "skipLibCheck": true,
     "strict": true,
     "strictNullChecks": true,
-    "moduleResolution": "Bundler",
+    "moduleResolution": "node",
     "module": "ESNext",
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "incremental": true,
-    "composite": true,
     "plugins": [
       {
         "name": "next"
@@ -31,7 +30,8 @@
     "src/**/*.tsx",
     "utils/**/*.ts",
     "utils/**/*.tsx",
-    ".next/types/**/*.ts"
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
