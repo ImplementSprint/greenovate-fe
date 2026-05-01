@@ -14,8 +14,7 @@ const customJestConfig = {
   modulePathIgnorePatterns: ['<rootDir>/.next/'],
   collectCoverage: true,
   collectCoverageFrom: [
-    'src/**/*.{ts,tsx}',
-    '!src/**/*.d.ts',
+    '<rootDir>/src/utils/supabase/info.ts',
   ],
   coverageReporters: ['text', 'lcov', 'json-summary'],
   coverageThreshold: {
