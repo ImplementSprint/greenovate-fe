@@ -6,6 +6,8 @@ import { discountApi, DiscountValidationResult, DiscountApprovalRequest } from '
 // Number format utility
 import { formatCurrency } from '../utils/numberformatters';
 import SplitPaymentForm, { PaymentEntry } from './SplitPaymentForm';
+import GCashQRPanel from './GCashQRPanel';
+import { calculateTaxDiscountBreakdown, TaxDiscountBreakdown } from '../utils/vatCalculator';
 
 interface PaymentIcons {
     cash_icon: any;
@@ -15,6 +17,9 @@ interface PaymentIcons {
 
 interface PaymentFormProps {
     total: number;
+    subtotal?: number;
+    tax?: number;
+    taxBreakdown?: TaxDiscountBreakdown;
     paymentMethod: string | null;
     setPaymentMethod: (method: string | null) => void;
     cashReceived: string;
@@ -26,10 +31,26 @@ interface PaymentFormProps {
     icons: PaymentIcons;
     canApproveDiscount?: boolean;
     isSubmitting?: boolean;
+    preAppliedDiscountAmount?: number;
+    preAppliedDiscountType?: string;
+    preAppliedDiscountPercent?: number;
 }
+
+const toTitleCase = (value: string): string =>
+    value
+        .toLowerCase()
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const toSentenceCase = (value: string): string => {
+    const lower = value.toLowerCase();
+    return lower.replace(/(^\s*[a-z])|([.!?]\s*[a-z])/g, (match) => match.toUpperCase());
+};
 
 const PaymentForm: React.FC<PaymentFormProps> = ({
     total: initialTotal,
+    subtotal = 0,
+    tax = 0,
+    taxBreakdown: preAppliedTaxBreakdown,
     paymentMethod,
     setPaymentMethod,
     cashReceived,
@@ -39,35 +60,33 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
     icons: { cash_icon, card_icon, mobile_icon },
     canApproveDiscount = false,
     isSubmitting = false,
+    preAppliedDiscountAmount = 0,
+    preAppliedDiscountType = 'none',
+    preAppliedDiscountPercent = 0,
 }) => {
+    const isPromoApplied = !!(preAppliedDiscountType && !['none', 'senior', 'pwd'].includes(preAppliedDiscountType.toLowerCase()));
     // --- Essential States ---
     const [customerName, setCustomerName] = useState('');
-    const [discountType, setDiscountType] = useState('none'); // 'none', 'senior', 'pwd'
+    const [discountType, setDiscountType] = useState(preAppliedDiscountType || 'none'); // 'none', 'senior', 'pwd'
     const [notes, setNotes] = useState('');
     const [selectedTags, setSelectedTags] = useState<string[]>([]);
     const [refNo, setRefNo] = useState('');
     const [cardLast4, setCardLast4] = useState('');
-    const [mobileProvider, setMobileProvider] = useState('GCash'); // GCash, Maya
+    const [cardNumber, setCardNumber] = useState('');
+    const [mobileNumber, setMobileNumber] = useState('');
+    const [mobileProvider, setMobileProvider] = useState<'gcash' | 'maya' | 'qrph'>('gcash');
     const [isSplitMode, setIsSplitMode] = useState(false);
-
-    // ── POS-S4-008-T1: Discount/Promo code validation state ──
-    const [promoCode, setPromoCode] = useState('');
-    const [promoValidating, setPromoValidating] = useState(false);
-    const [promoResult, setPromoResult] = useState<DiscountValidationResult | null>(null);
+    // ── OR (Official Receipt) Fields ---
+    const [orFields, setOrFields] = useState({
+        name: '',
+        tin: '',
+        address: '',
+    });
+    const [customDiscountPercent, setCustomDiscountPercent] = useState(preAppliedDiscountPercent || 0);
 
     // ── POS-S4-008-T2: Manual discount approval state ──
     const [approvalStatus, setApprovalStatus] = useState<DiscountApprovalRequest | null>(null);
     const [approvalPolling, setApprovalPolling] = useState(false);
-
-    // T1: Validate promo/discount code via API
-    const handleValidatePromoCode = useCallback(async () => {
-        if (!promoCode.trim()) return;
-        setPromoValidating(true);
-        setPromoResult(null);
-        const result = await discountApi.validateDiscountCode(promoCode);
-        setPromoResult(result);
-        setPromoValidating(false);
-    }, [promoCode]);
 
     // T2: Request manual discount approval + poll for result
     const handleRequestApproval = useCallback(async (type: string) => {
@@ -122,25 +141,47 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
 
     // --- Derived Calculations ---
     const [finalTotal, setFinalTotal] = useState(initialTotal);
-    const [discountAmount, setDiscountAmount] = useState(0);
+    const [discountAmount, setDiscountAmount] = useState(preAppliedDiscountAmount || 0);
+    const [taxBreakdown, setTaxBreakdown] = useState<TaxDiscountBreakdown>(
+        preAppliedTaxBreakdown || calculateTaxDiscountBreakdown({
+            subtotal: subtotal || Math.max(0, initialTotal - tax),
+            vat: tax,
+            discountType: preAppliedDiscountType,
+            discountAmount: preAppliedDiscountAmount,
+        })
+    );
 
     const getImgSrc = (img: any): string => {
         return typeof img === 'string' ? img : img?.src ?? '';
     };
 
     useEffect(() => {
-        if (discountType === 'none') {
-            setFinalTotal(Number(initialTotal.toFixed(2)));
-            setDiscountAmount(0);
-        } else {
-            // PH Logic: Remove 12% VAT, then apply 20% discount
-            const vatable = initialTotal / 1.12;
-            const discount = vatable * 0.20;
-            const discountedTotal = vatable - discount;
-            setDiscountAmount(Number(discount.toFixed(2)));
-            setFinalTotal(Number(discountedTotal.toFixed(2)));
+        const shouldUsePreAppliedBreakdown =
+            preAppliedTaxBreakdown &&
+            preAppliedDiscountAmount > 0 &&
+            String(discountType || '').toLowerCase() === String(preAppliedDiscountType || '').toLowerCase();
+        
+        let percent = 0;
+        const normType = String(discountType || '').toLowerCase();
+        if (normType === 'senior' || normType === 'pwd') {
+            percent = 20;
+        } else if (normType !== 'none') {
+            percent = customDiscountPercent;
         }
-    }, [discountType, initialTotal]);
+
+        const nextBreakdown = shouldUsePreAppliedBreakdown
+            ? preAppliedTaxBreakdown
+            : calculateTaxDiscountBreakdown({
+                subtotal: subtotal || Math.max(0, initialTotal - tax),
+                vat: tax,
+                discountType,
+                discountPercent: percent,
+            });
+
+        setDiscountAmount(nextBreakdown.discountAmount);
+        setFinalTotal(nextBreakdown.totalDue);
+        setTaxBreakdown(nextBreakdown);
+    }, [discountType, initialTotal, preAppliedDiscountAmount, preAppliedDiscountType, preAppliedTaxBreakdown, subtotal, tax, customDiscountPercent]);
 
     // Recalculate change based on discounted total
     const currentCashReceived = parseFloat(cashReceived) || 0;
@@ -188,20 +229,42 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
         return breakdown;
     };
 
-    const onComplete = () => {
-        const details = {
-            customerName,
-            discountType,
-            discountAmount,
-            finalTotal,
-            refNo,
-            cardLast4,
-            mobileProvider,
-            tendered: cashReceived,
-            notes,
-            tags: selectedTags,
-        };
-        handleCompletePayment(details);
+    const onComplete = async () => {
+        try {
+            // ✅ Only send if OR is requested
+            if (selectedTags.includes('Request for Official Receipt (OR)')) {
+                await fetch('http://localhost:3033/receipt/info', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...orFields, name: toTitleCase(orFields.name) }),
+                });
+            }
+
+            const details = {
+                customerName: toTitleCase(customerName),
+                discountType,
+                discountAmount,
+                finalTotal,
+                refNo: paymentMethod === 'card' ? 'CARD-ONLINE' : paymentMethod === 'mobile' ? `${mobileProvider.toUpperCase()}-ONLINE` : refNo,
+                cardLast4: paymentMethod === 'card' ? '0000' : cardLast4,
+                cardNumber: '',
+                mobileNumber: '',
+                mobileProvider,
+                tendered: cashReceived,
+                notes,
+                tags: selectedTags,
+                taxBreakdown,
+                orFields: selectedTags.includes('Request for Official Receipt (OR)')
+                    ? { ...orFields, name: toTitleCase(orFields.name) }
+                    : undefined,
+            };
+
+            handleCompletePayment(details);
+
+        } catch (err) {
+            console.error('Failed to save OR info:', err);
+            alert('Failed to save receipt details.');
+        }
     };
 
     const onSplitComplete = (entries: PaymentEntry[]) => {
@@ -212,7 +275,7 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
         const change = Math.max(0, totalCash - (totalCash - Math.max(0, totalPaid - finalTotal)));
 
         handleCompletePayment({
-            customerName,
+            customerName: toTitleCase(customerName),
             discountType,
             discountAmount,
             finalTotal,
@@ -220,6 +283,10 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
             changeAmount: change,
             notes,
             tags: selectedTags,
+            taxBreakdown,
+            orFields: selectedTags.includes('Request for Official Receipt (OR)')
+                ? { ...orFields, name: toTitleCase(orFields.name) }
+                : undefined,
         });
     };
 
@@ -234,15 +301,44 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                             type="text"
                             className="modern-input"
                             value={customerName}
-                            onChange={(e) => setCustomerName(e.target.value)}
+                            onChange={(e) => setCustomerName(toTitleCase(e.target.value))}
                             placeholder="Walking Customer"
                         />
+                    </div>
+
+                    {/* Applied Discount moved up */}
+                    <div className="discount-section" style={{ marginTop: '15px' }}>
+                        <label className="section-label-sm">Applied Discount</label>
+                        <div className="discount-grid">
+                            {(['none', 'senior', 'pwd'] as const).map(type => (
+                                <button
+                                    key={type}
+                                    className={`discount-btn ${
+                                        (type === 'none' && !['senior', 'pwd'].includes(discountType.toLowerCase())) || 
+                                        discountType.toLowerCase() === type 
+                                            ? 'active' : ''
+                                    }`}
+                                    onClick={() => {
+                                        setDiscountType(type);
+                                        setCustomDiscountPercent(0);
+                                    }}
+                                    disabled={(!canApproveDiscount && type !== 'none') || (type !== 'none' && isPromoApplied)}
+                                >
+                                    {type === 'none' ? 'No Discount' : type.toUpperCase()}
+                                </button>
+                            ))}
+                        </div>
+                        {isPromoApplied && (
+                            <div style={{ color: '#0284c7', background: '#e0f2fe', padding: '8px 12px', borderRadius: '6px', fontSize: '0.85rem', marginTop: '10px', lineHeight: '1.4' }}>
+                                ℹ️ Promo code <strong>{preAppliedDiscountType}</strong> applied from the main screen. To use Senior Citizen or PWD discount, please clear the discount code on the main screen.
+                            </div>
+                        )}
                     </div>
 
                     <div className="input-group" style={{ marginTop: '15px' }}>
                         <label className="section-label-sm">Transaction Tags</label>
                         <div className="discount-grid">
-                            {['Bulk Order', 'Delivery', 'Special Request'].map(tag => (
+                            {['Request for Official Receipt (OR)'].map(tag => (
                                 <button
                                     key={tag}
                                     className={`discount-btn ${selectedTags.includes(tag) ? 'active' : ''}`}
@@ -253,38 +349,69 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                             ))}
                         </div>
                     </div>
+
+
+                    {/* Dynamic OR Fields */}
+                    {selectedTags.includes('Request for Official Receipt (OR)') && (
+                        <div className="input-group" style={{ marginTop: '15px', padding: '12px', borderLeft: '4px solid #007bff', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+                            <label className="section-label-sm">Official Receipt Details</label>
+                            <div style={{ marginTop: '12px' }}>
+                                <label className="section-label-sm">Name</label>
+                                <input
+                                    type="text"
+                                    className="modern-input"
+                                    value={orFields.name}
+                                    onChange={(e) => setOrFields({ ...orFields, name: toTitleCase(e.target.value) })}
+                                    placeholder="Full Name"
+                                />
+                            </div>
+                            <div style={{ marginTop: '12px' }}>
+                                <label className="section-label-sm">TIN (Taxpayer Identification Number)</label>
+                                <input
+                                    type="text"
+                                    className="modern-input"
+                                    value={orFields.tin}
+                                    onChange={(e) => setOrFields({ ...orFields, tin: e.target.value })}
+                                    placeholder="000-000-000-000"
+                                />
+                            </div>
+                            <div style={{ marginTop: '12px' }}>
+                                <label className="section-label-sm">Address</label>
+                                <textarea
+                                    className="modern-input"
+                                    style={{ height: '60px', resize: 'none', paddingTop: '10px' }}
+                                    value={orFields.address}
+                                    onChange={(e) => setOrFields({ ...orFields, address: e.target.value })}
+                                    placeholder="Full Address"
+                                />
+                            </div>
+                        </div>
+                    )}
+
                     <div className="input-group" style={{ marginTop: '15px' }}>
                         <label className="section-label-sm">Transaction Notes ({notes.length}/500)</label>
                         <textarea
                             className="modern-input"
                             style={{ height: '60px', resize: 'none', paddingTop: '10px' }}
                             value={notes}
-                            onChange={(e) => setNotes(e.target.value.slice(0, 500))}
+                            onChange={(e) => setNotes(toSentenceCase(e.target.value).slice(0, 500))}
                             placeholder="Add special instructions..."
                         />
                     </div>
 
-                    <div className="discount-section">
-                        <label className="section-label-sm">Applied Discount</label>
-                        <div className="discount-grid">
-                            {(['none', 'senior', 'pwd'] as const).map(type => (
-                                <button
-                                    key={type}
-                                    className={`discount-btn ${discountType === type ? 'active' : ''}`}
-                                    onClick={() => setDiscountType(type)}
-                                    disabled={!canApproveDiscount && type !== 'none'}
-                                >
-                                    {type === 'none' ? 'No Discount' : type.toUpperCase()}
-                                </button>
-                            ))}
-                        </div>
+                    {/* SplitPaymentForm remains at the bottom */}
+                    <div style={{ marginTop: '15px' }}>
                         <SplitPaymentForm
                             finalTotal={finalTotal}
                             icons={{ cash_icon, card_icon, mobile_icon }}
                             onComplete={onSplitComplete}
                             onCancel={handleCancelPayment}
-                            onBack={() => setIsSplitMode(false)}
+                            onBack={() => {
+                                setIsSplitMode(false);
+                                setPaymentMethod(null);
+                            }}
                             isSubmitting={isSubmitting}
+                            isValid={!selectedTags.includes('Request for Official Receipt (OR)') || (orFields.name.trim() !== '' && orFields.tin.trim() !== '' && orFields.address.trim() !== '')}
                         />
                     </div>
                 </div>
@@ -310,7 +437,10 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                         <img src={getImgSrc(mobile_icon)} alt="" className="method-img-icon" />
                         <span>Mobile</span>
                     </button>
-                    <button className="method-item split-method-item" onClick={() => setIsSplitMode(true)}>
+                    <button className="method-item split-method-item" onClick={() => {
+                        setPaymentMethod('split');
+                        setIsSplitMode(true);
+                    }}>
                         <span className="split-method-icon-badge">⊕</span>
                         <span>Split Payment</span>
                     </button>
@@ -334,17 +464,17 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                             <label className="section-label-sm">Customer Name (Optional)</label>
                             <input
                                 type="text"
-                                className="modern-input"
-                                value={customerName}
-                                onChange={(e) => setCustomerName(e.target.value)}
-                                placeholder="Walking Customer"
-                            />
+                            className="modern-input"
+                            value={customerName}
+                            onChange={(e) => setCustomerName(toTitleCase(e.target.value))}
+                            placeholder="Walking Customer"
+                        />
                         </div>
 
                         <div className="input-group" style={{ marginTop: '15px' }}>
                             <label className="section-label-sm">Transaction Tags</label>
                             <div className="discount-grid">
-                                {['Bulk Order', 'Delivery', 'Special Request'].map(tag => (
+                                {['Request for Official Receipt (OR)'].map(tag => (
                                     <button
                                         key={tag}
                                         className={`discount-btn ${selectedTags.includes(tag) ? 'active' : ''}`}
@@ -362,10 +492,47 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                                 className="modern-input"
                                 style={{ height: '80px', resize: 'none', paddingTop: '10px' }}
                                 value={notes}
-                                onChange={(e) => setNotes(e.target.value.slice(0, 500))}
+                                onChange={(e) => setNotes(toSentenceCase(e.target.value).slice(0, 500))}
                                 placeholder="Add special instructions or customer requests..."
                             />
                         </div>
+
+                        {/* Dynamic OR Fields */}
+                        {selectedTags.includes('Request for Official Receipt (OR)') && (
+                            <div className="input-group" style={{ marginTop: '15px', padding: '12px', borderLeft: '4px solid #007bff', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+                                <label className="section-label-sm">Official Receipt Details</label>
+                                <div style={{ marginTop: '12px' }}>
+                                    <label className="section-label-sm">Name</label>
+                                    <input
+                                        type="text"
+                                        className="modern-input"
+                                        value={orFields.name}
+                                        onChange={(e) => setOrFields({ ...orFields, name: toTitleCase(e.target.value) })}
+                                        placeholder="Full Name"
+                                    />
+                                </div>
+                                <div style={{ marginTop: '12px' }}>
+                                    <label className="section-label-sm">TIN (Taxpayer Identification Number)</label>
+                                    <input
+                                        type="text"
+                                        className="modern-input"
+                                        value={orFields.tin}
+                                        onChange={(e) => setOrFields({ ...orFields, tin: e.target.value })}
+                                        placeholder="000-000-000-000"
+                                    />
+                                </div>
+                                <div style={{ marginTop: '12px' }}>
+                                    <label className="section-label-sm">Address</label>
+                                    <textarea
+                                        className="modern-input"
+                                        style={{ height: '60px', resize: 'none', paddingTop: '10px' }}
+                                        value={orFields.address}
+                                        onChange={(e) => setOrFields({ ...orFields, address: e.target.value })}
+                                        placeholder="Full Address"
+                                    />
+                                </div>
+                            </div>
+                        )}
 
                         <div className="discount-section">
                             <label className="section-label-sm">Applied Discount</label>
@@ -373,7 +540,11 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                                 {(['none', 'senior', 'pwd'] as const).map(type => (
                                     <button
                                         key={type}
-                                        className={`discount-btn ${discountType === type ? 'active' : ''}`}
+                                        className={`discount-btn ${
+                                            (type === 'none' && !['senior', 'pwd'].includes(discountType.toLowerCase())) || 
+                                            discountType.toLowerCase() === type 
+                                                ? 'active' : ''
+                                        }`}
                                         onClick={() => {
                                             if (canApproveDiscount || type === 'none') {
                                                 setDiscountType(type);
@@ -381,13 +552,18 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                                                 handleRequestApproval(type);
                                             }
                                         }}
-                                        disabled={approvalPolling && !canApproveDiscount && type !== 'none'}
+                                        disabled={(approvalPolling && !canApproveDiscount && type !== 'none') || (type !== 'none' && isPromoApplied)}
                                         title={!canApproveDiscount && type !== 'none' ? 'Requires supervisor approval — will request' : undefined}
                                     >
                                         {type === 'none' ? 'No Discount' : type.toUpperCase()}
                                     </button>
                                 ))}
                             </div>
+                            {isPromoApplied && (
+                                <div style={{ color: '#0284c7', background: '#e0f2fe', padding: '8px 12px', borderRadius: '6px', fontSize: '0.85rem', marginTop: '10px', lineHeight: '1.4' }}>
+                                    ℹ️ Promo code <strong>{preAppliedDiscountType}</strong> applied from the main screen. To use Senior Citizen or PWD discount, please clear the discount code on the main screen.
+                                </div>
+                            )}
 
                             {/* T2: Approval status indicator */}
                             {approvalStatus && (
@@ -401,13 +577,13 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                                     gap: '8px',
                                     background: approvalStatus.status === 'approved' ? '#d4edda'
                                         : approvalStatus.status === 'rejected' ? '#f8d7da'
-                                        : '#fff3cd',
+                                            : '#fff3cd',
                                     color: approvalStatus.status === 'approved' ? '#155724'
                                         : approvalStatus.status === 'rejected' ? '#721c24'
-                                        : '#856404',
+                                            : '#856404',
                                     border: `1px solid ${approvalStatus.status === 'approved' ? '#c3e6cb'
                                         : approvalStatus.status === 'rejected' ? '#f5c6cb'
-                                        : '#ffc107'}`,
+                                            : '#ffc107'}`,
                                 }}>
                                     {approvalPolling && (
                                         <div style={{
@@ -425,59 +601,6 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                                     </span>
                                 </div>
                             )}
-
-                            {/* T1: Promo/Discount code input */}
-                            <div style={{ marginTop: '12px' }}>
-                                <label className="section-label-sm">Promo Code</label>
-                                <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-                                    <input
-                                        type="text"
-                                        className="modern-input"
-                                        placeholder="Enter promo code"
-                                        value={promoCode}
-                                        onChange={(e) => { setPromoCode(e.target.value.toUpperCase()); setPromoResult(null); }}
-                                        onKeyDown={(e) => { if (e.key === 'Enter') handleValidatePromoCode(); }}
-                                        style={{ flex: 1 }}
-                                    />
-                                    <button
-                                        className="discount-btn active"
-                                        onClick={handleValidatePromoCode}
-                                        disabled={promoValidating || !promoCode.trim()}
-                                        style={{
-                                            padding: '0 16px',
-                                            opacity: promoValidating || !promoCode.trim() ? 0.6 : 1,
-                                            minWidth: '80px',
-                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                                        }}
-                                    >
-                                        {promoValidating ? (
-                                            <div style={{
-                                                width: '14px', height: '14px',
-                                                border: '2px solid #fff',
-                                                borderTopColor: 'transparent',
-                                                borderRadius: '50%',
-                                                animation: 'spin 0.6s linear infinite',
-                                            }} />
-                                        ) : 'Apply'}
-                                    </button>
-                                </div>
-                                {promoResult && (
-                                    <div style={{
-                                        marginTop: '6px',
-                                        padding: '6px 10px',
-                                        borderRadius: '6px',
-                                        fontSize: '0.8rem',
-                                        background: promoResult.valid ? '#d4edda' : '#f8d7da',
-                                        color: promoResult.valid ? '#155724' : '#721c24',
-                                        border: `1px solid ${promoResult.valid ? '#c3e6cb' : '#f5c6cb'}`,
-                                    }}>
-                                        {promoResult.valid
-                                            ? `✓ ${promoResult.description || `${promoResult.discountPercent}% off applied`}`
-                                            : `✗ ${promoResult.error || 'Invalid code'}`
-                                        }
-                                    </div>
-                                )}
-                            </div>
                         </div>
                     </div>
 
@@ -520,61 +643,45 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                         {paymentMethod === 'mobile' && (
                             <div className="mobile-payment-form">
                                 <div className="provider-selection">
-                                    <p className="section-label-sm">Mobile Provider</p>
-                                    <div className="discount-grid">
-                                        {['GCash', 'Maya'].map(p => (
-                                            <button
-                                                key={p}
-                                                className={`discount-btn ${mobileProvider === p ? 'active' : ''}`}
-                                                onClick={() => setMobileProvider(p)}
-                                            >
-                                                {p}
-                                            </button>
-                                        ))}
+                                    <p className="section-label-sm">Select Mobile Payment Method</p>
+                                    <div className="discount-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginTop: '10px' }}>
+                                        <button
+                                            className={`discount-btn ${mobileProvider === 'gcash' ? 'active' : ''}`}
+                                            onClick={() => setMobileProvider('gcash')}
+                                            style={{ padding: '15px', fontSize: '1rem', fontWeight: 'bold' }}
+                                        >
+                                            GCash
+                                        </button>
+                                        <button
+                                            className={`discount-btn ${mobileProvider === 'maya' ? 'active' : ''}`}
+                                            onClick={() => setMobileProvider('maya')}
+                                            style={{ padding: '15px', fontSize: '1rem', fontWeight: 'bold' }}
+                                        >
+                                            Maya
+                                        </button>
+                                        <button
+                                            className={`discount-btn ${mobileProvider === 'qrph' ? 'active' : ''}`}
+                                            onClick={() => setMobileProvider('qrph')}
+                                            style={{ padding: '15px', fontSize: '1rem', fontWeight: 'bold' }}
+                                        >
+                                            QRPh (QR)
+                                        </button>
                                     </div>
                                 </div>
-                                <div className="input-group" style={{ marginTop: '15px' }}>
-                                    <label className="modern-label">Reference Number</label>
-                                    <input
-                                        type="text"
-                                        className="modern-input-lg"
-                                        placeholder="Ref #"
-                                        value={refNo}
-                                        onChange={(e) => setRefNo(e.target.value)}
-                                    />
+                                <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: '8px', fontSize: '0.9rem', lineHeight: '1.5' }}>
+                                    ℹ️ <strong>API Payment Gateway Enabled</strong>:
+                                    <br />
+                                    Clicking <strong>Complete Payment</strong> below will direct this tab to the secure PayMongo checkout screen for <strong>{mobileProvider === 'qrph' ? 'QRPh' : mobileProvider === 'gcash' ? 'GCash' : 'Maya'}</strong> where you can authorize the payment.
                                 </div>
                             </div>
                         )}
 
                         {paymentMethod === 'card' && (
                             <div className="card-payment-form">
-                                <div className="input-row" style={{ display: 'flex', gap: '10px' }}>
-                                    <div className="input-group" style={{ flex: 1 }}>
-                                        <label className="modern-label">Reference Number</label>
-                                        <input
-                                            type="text"
-                                            className="modern-input"
-                                            style={{ height: '45px', fontSize: '1.2rem' }}
-                                            placeholder="Ref #"
-                                            value={refNo}
-                                            onChange={(e) => setRefNo(e.target.value)}
-                                        />
-                                    </div>
-                                    <div className="input-group" style={{ width: '120px' }}>
-                                        <label className="modern-label">Last 4 Digits</label>
-                                        <input
-                                            type="text"
-                                            className="modern-input"
-                                            style={{ height: '45px', fontSize: '1.2rem' }}
-                                            placeholder="0000"
-                                            maxLength={4}
-                                            value={cardLast4}
-                                            onChange={(e) => {
-                                                const val = e.target.value.replace(/\D/g, '');
-                                                if (val.length <= 4) setCardLast4(val);
-                                            }}
-                                        />
-                                    </div>
+                                <div style={{ marginTop: '15px', padding: '12px 15px', backgroundColor: '#f0fdf4', color: '#166534', borderRadius: '8px', fontSize: '0.9rem', lineHeight: '1.4' }}>
+                                    ℹ️ <strong>Card Checkout Session Enabled</strong>:
+                                    <br />
+                                    Clicking <strong>Complete Payment</strong> will direct this tab to the secure credit card checkout.
                                 </div>
                             </div>
                         )}
@@ -585,11 +692,31 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                 <div className="payment-sidebar">
                     <div className="summary-card">
                         <div className="summary-row">
-                            <span>Original Total:</span>
-                            <span>{formatCurrency(initialTotal)}</span>
+                            <span>Gross Sales:</span>
+                            <span>{formatCurrency(taxBreakdown.grossVatableSales + tax)}</span>
+                        </div>
+                        <div className="summary-row">
+                            <span>VATable Sales:</span>
+                            <span>{formatCurrency(taxBreakdown.vatableSales)}</span>
+                        </div>
+                        {taxBreakdown.isVatExempt && (
+                            <div className="summary-row">
+                                <span>VAT-Exempt Sales:</span>
+                                <span>{formatCurrency(taxBreakdown.vatExemptSales)}</span>
+                            </div>
+                        )}
+                        <div className="summary-row">
+                            <span>VAT (12%):</span>
+                            <span>{formatCurrency(taxBreakdown.vatAmount)}</span>
                         </div>
                         {discountType !== 'none' && (
                             <>
+                                {taxBreakdown.vatDeduction > 0 && (
+                                    <div className="summary-row discount">
+                                        <span>VAT Discount/Deduction:</span>
+                                        <span>-{formatCurrency(taxBreakdown.vatDeduction)}</span>
+                                    </div>
+                                )}
                                 <div className="summary-row discount">
                                     <span>Discount ({discountType.toUpperCase()}):</span>
                                     <span>-{formatCurrency(discountAmount)}</span>
@@ -612,9 +739,15 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                             <p className="section-label-sm">Denomination Breakdown</p>
                             <div className="breakdown-list">
                                 {getDenominationBreakdown(currentChangeAmount).map((item, idx) => (
-                                    <div key={idx} className="breakdown-chip">
+                                    <div key={idx} className="breakdown-chip" style={{
+                                        backgroundColor: item.label === '1 centavo' ? '#ffebee' : undefined,
+                                        borderColor: item.label === '1 centavo' ? '#ff5252' : undefined,
+                                    }}>
                                         <span className="breakdown-count">{item.count}×</span>
-                                        <span className="breakdown-label">{item.label}</span>
+                                        <span className="breakdown-label" style={{
+                                            color: item.label === '1 centavo' ? '#d32f2f' : undefined,
+                                            fontWeight: item.label === '1 centavo' ? '600' : undefined,
+                                        }}>{item.label}</span>
                                     </div>
                                 ))}
                             </div>
@@ -627,15 +760,25 @@ const PaymentForm: React.FC<PaymentFormProps> = ({
                 <button className="cancel-btn" onClick={handleCancelPayment}>Cancel</button>
                 <button
                     className={`complete-btn ${(() => {
-                        if (paymentMethod === 'cash') return (parseFloat(cashReceived) >= finalTotal - 0.001) ? 'active' : '';
-                        if (paymentMethod === 'card') return (refNo.trim() !== '' && cardLast4.length === 4) ? 'active' : '';
-                        if (paymentMethod === 'mobile') return (refNo.trim() !== '') ? 'active' : '';
+                        const isOrRequired = selectedTags.includes('Request for Official Receipt (OR)');
+                        const isOrValid = !isOrRequired || (orFields.name.trim() && orFields.tin.trim() && orFields.address.trim());
+                        
+                        if (!isOrValid) return '';
+                        
+                        if (paymentMethod === 'cash') return (cashReceived && parseFloat(cashReceived) >= finalTotal - 0.001) ? 'active' : '';
+                        if (paymentMethod === 'card') return 'active';
+                        if (paymentMethod === 'mobile') return 'active';
                         return '';
                     })()}`}
                     disabled={(() => {
+                        const isOrRequired = selectedTags.includes('Request for Official Receipt (OR)');
+                        const isOrInvalid = isOrRequired && (!orFields.name.trim() || !orFields.tin.trim() || !orFields.address.trim());
+                        
+                        if (isOrInvalid) return true;
+                        
                         if (paymentMethod === 'cash') return (parseFloat(cashReceived) < finalTotal - 0.001 || !cashReceived);
-                        if (paymentMethod === 'card') return (refNo.trim() === '' || cardLast4.length !== 4);
-                        if (paymentMethod === 'mobile') return (refNo.trim() === '');
+                        if (paymentMethod === 'card') return false;
+                        if (paymentMethod === 'mobile') return false;
                         return true;
                     })() || isSubmitting}
                     onClick={onComplete}

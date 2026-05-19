@@ -1,10 +1,13 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import PaymentForm from './PaymentForm';
+import ItemizedReceipt, { ReceiptItem } from './ItemizedReceipt';
 
 // Number format utility
 import { formatCurrency } from '../utils/numberformatters';
+import { printReceipt } from '../utils/printUtils';
+import { TaxDiscountBreakdown } from '../utils/vatCalculator';
 
 interface PaymentIcons {
     cash_icon: any;
@@ -15,6 +18,8 @@ interface PaymentIcons {
 interface PaymentModalProps {
     isOpen: boolean;
     total: number;
+    subtotal?: number;
+    tax?: number;
     paymentMethod: string | null;
     setPaymentMethod: (method: string | null) => void;
     cashReceived: string;
@@ -28,14 +33,27 @@ interface PaymentModalProps {
     closePaymentModal: () => void;
     icons: PaymentIcons;
     canApproveDiscount: boolean;
-    onOpenGiftReceipt?: () => void;
     apiChangeAmount?: number;
     isSubmitting?: boolean;
+    discountAmount?: number;
+    discountType?: string;
+    preAppliedDiscountPercent?: number;
+    receiptItems?: ReceiptItem[];
+    customerName?: string;
+    taxBreakdown?: TaxDiscountBreakdown;
+    onOpenGiftReceipt?: () => void;
+    orFields?: {
+        name: string;
+        tin: string;
+        address: string;
+    };
 }
 
 const PaymentModal: React.FC<PaymentModalProps> = ({
     isOpen,
     total,
+    subtotal = 0,
+    tax = 0,
     paymentMethod,
     setPaymentMethod,
     cashReceived,
@@ -49,36 +67,93 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
     closePaymentModal,
     icons,
     canApproveDiscount,
-    onOpenGiftReceipt,
     apiChangeAmount,
     isSubmitting = false,
+    discountAmount,
+    discountType,
+    preAppliedDiscountPercent = 0,
+    receiptItems = [],
+    customerName,
+    taxBreakdown,
+    orFields,
 }) => {
+    const [isPrinting, setIsPrinting] = useState(false);
+
+    const handlePrintReceipt = async () => {
+        setIsPrinting(true);
+        try {
+            await printReceipt({
+                receiptNumber: dbReceiptNumber,
+                transactionId: dbTransactionId,
+                items: receiptItems,
+                subtotal,
+                tax,
+                discountAmount,
+                discountType,
+                taxBreakdown,
+                total,
+                paymentMethod: paymentMethod || 'cash',
+                changeAmount: apiChangeAmount || changeAmount,
+                customerName,
+                orFields,
+            });
+        } catch (error) {
+            console.error('Print error:', error);
+        } finally {
+            setIsPrinting(false);
+        }
+    };
     if (!isOpen) return null;
 
     return (
         <div className="modal-overlay">
             {paymentStatus === 'success' ? (
                 <div className="success-modal">
-                    <div className="success-icon">✓</div>
-                    <h2 className="modal-title">Payment Successful!</h2>
-                    <p>
-                        Receipt Number:{" "}
-                        <strong>{dbReceiptNumber ? dbReceiptNumber : "Generating..."}</strong>
-                    </p>
-                    {apiChangeAmount !== undefined && apiChangeAmount > 0 && (
-                        <p style={{ fontSize: '1.2rem', margin: '10px 0' }}>
-                            Change Amount: <strong>{formatCurrency(apiChangeAmount)}</strong>
-                        </p>
+                    <div className="success-modal-body">
+                    {receiptItems && receiptItems.length > 0 ? (
+                        <>
+                            <ItemizedReceipt
+                                receiptNumber={dbReceiptNumber}
+                                transactionId={dbTransactionId}
+                                items={receiptItems}
+                                subtotal={subtotal}
+                                tax={tax}
+                                discountAmount={discountAmount}
+                                discountType={discountType}
+                                taxBreakdown={taxBreakdown}
+                                total={total}
+                                paymentMethod={paymentMethod || 'cash'}
+                                changeAmount={apiChangeAmount !== undefined ? apiChangeAmount : changeAmount}
+                                customerName={customerName}
+                                orFields={orFields}
+                            />
+                        </>
+                    ) : (
+                        <div>
+                            <div className="success-icon">✓</div>
+                            <h2 className="modal-title">Payment Successful!</h2>
+                            <p>
+                                Receipt Number:{" "}
+                                <strong>{dbReceiptNumber ? dbReceiptNumber : "Generating..."}</strong>
+                            </p>
+                            {apiChangeAmount !== undefined && apiChangeAmount > 0 && (
+                                <p style={{ fontSize: '1.2rem', margin: '10px 0' }}>
+                                    Change Amount: <strong>{formatCurrency(apiChangeAmount)}</strong>
+                                </p>
+                            )}
+                            <p>Transaction completed</p>
+                        </div>
                     )}
-                    <p>Transaction completed</p>
-                    <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '16px', flexWrap: 'wrap' }}>
-                        <button className="close-success-btn" onClick={closePaymentModal}>Back to POS</button>
+                    </div>
+
+                    <div className="success-modal-actions">
+                        <button className="success-modal-action-btn" onClick={closePaymentModal}>Back to POS</button>
                         <button
-                            className="close-success-btn"
-                            style={{ background: '#01a2ad', color: 'white', border: 'none' }}
-                            onClick={onOpenGiftReceipt}
+                            className="success-modal-action-btn"
+                            onClick={handlePrintReceipt}
+                            disabled={isPrinting}
                         >
-                        Print Gift Receipt
+                            {isPrinting ? 'Printing...' : '🖨 Print Receipt'}
                         </button>
                     </div>
                 </div>
@@ -92,7 +167,9 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
                                 <span className="txn-id-value">{dbTransactionId ? dbTransactionId : "Generating..."}</span>
                             </p>
                         </div>
-                        <button className="close-modal" onClick={closePaymentModal}>✕</button>
+                        {!paymentMethod && (
+                            <button className="close-modal" onClick={closePaymentModal}>X</button>
+                        )}
                     </div>
 
                     <div className="amount-display">
@@ -102,6 +179,9 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
 
                     <PaymentForm
                         total={total}
+                        subtotal={subtotal}
+                        tax={tax}
+                        taxBreakdown={taxBreakdown}
                         paymentMethod={paymentMethod}
                         setPaymentMethod={setPaymentMethod}
                         cashReceived={cashReceived}
@@ -113,6 +193,9 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
                         icons={icons}
                         canApproveDiscount={canApproveDiscount}
                         isSubmitting={isSubmitting}
+                        preAppliedDiscountAmount={discountAmount}
+                        preAppliedDiscountType={discountType}
+                        preAppliedDiscountPercent={preAppliedDiscountPercent}
                     />
                 </div>
             )}

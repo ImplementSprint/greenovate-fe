@@ -11,7 +11,7 @@ import { authFetch } from './authFetch';
 export interface QueuedAction {
   id: string;
   timestamp: string;
-  type: 'clock-in' | 'clock-out' | 'break-start' | 'break-end';
+  type: 'clock-in' | 'clock-out' | 'break-start' | 'break-end' | 'sale';
   url: string;
   method: 'POST' | 'PUT';
   body: Record<string, any>;
@@ -93,6 +93,7 @@ export async function syncOfflineQueue(): Promise<{
 
   for (const action of queue) {
     try {
+      console.info(`[OfflineQueue] Attempting to sync action ${action.id} to ${action.url}...`);
       const res = await authFetch(action.url, {
         method: action.method,
         headers: { 'Content-Type': 'application/json' },
@@ -101,18 +102,21 @@ export async function syncOfflineQueue(): Promise<{
 
       if (res.ok) {
         synced++;
-        console.info(`[OfflineQueue] Synced: ${action.type} (${action.id})`);
+        console.info(`[OfflineQueue] ✅ Successfully synced: ${action.type} (${action.id})`);
       } else {
+        const errorText = await res.text().catch(() => 'No error body');
+        console.warn(`[OfflineQueue] ❌ Sync failed for ${action.id} (Status: ${res.status}): ${errorText}`);
         action.retries++;
         if (action.retries < MAX_RETRIES) {
           remaining.push(action);
-          console.warn(`[OfflineQueue] Retry ${action.retries}/${MAX_RETRIES}: ${action.type} (${action.id})`);
+          console.warn(`[OfflineQueue] Retry scheduled (${action.retries}/${MAX_RETRIES})`);
         } else {
           failed++;
-          console.error(`[OfflineQueue] Permanently failed after ${MAX_RETRIES} retries: ${action.type} (${action.id})`);
+          console.error(`[OfflineQueue] 💀 Permanently failed after ${MAX_RETRIES} retries.`);
         }
       }
-    } catch (err) {
+    } catch (err: any) {
+      console.error(`[OfflineQueue] 🚨 Network error during sync attempt for ${action.id}:`, err);
       // Network still down — keep in queue
       action.retries++;
       if (action.retries < MAX_RETRIES) {
@@ -121,7 +125,6 @@ export async function syncOfflineQueue(): Promise<{
         failed++;
       }
       // Stop syncing if we're offline — no point trying the rest.
-      // Push all REMAINING unprocessed items (those after current index).
       const currentIdx = queue.indexOf(action);
       for (let i = currentIdx + 1; i < queue.length; i++) {
         remaining.push(queue[i]);
@@ -131,7 +134,7 @@ export async function syncOfflineQueue(): Promise<{
   }
 
   saveQueue(remaining);
-  console.info(`[OfflineQueue] Sync complete: ${synced} synced, ${failed} failed, ${remaining.length} remaining.`);
+  console.info(`[OfflineQueue] Sync finished: ${synced} synced, ${failed} failed, ${remaining.length} remaining.`);
 
   return { synced, failed, remaining: remaining.length };
 }

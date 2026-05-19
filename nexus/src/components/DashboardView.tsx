@@ -3,20 +3,18 @@
 import React from 'react';
 import {
   ResponsiveContainer,
+  AreaChart,
+  Area,
   BarChart,
   Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  PieChart,
-  Pie,
   Cell,
-  Legend,
 } from 'recharts';
 
 import {
-  getBarColor,
   getRevenueByHour,
   getCategoryData,
   getPaymentMethodStats,
@@ -49,6 +47,29 @@ const DashboardView: React.FC<DashboardViewProps> = ({ transactions }) => {
   const paymentMethodStats = getPaymentMethodStats(transactions);
 
   const chartSeriesColors = ['#1b2a47', '#314566', '#4a6288', '#6b83ab', '#90a7cb'];
+  const intradayTrendData = revenueByHour.reduce<Array<{ time: string; amount: number; cumulative: number }>>(
+    (series, entry) => {
+      const previousTotal = series[series.length - 1]?.cumulative || 0;
+      const amount = Math.max(0, entry.amount || 0);
+      series.push({
+        time: entry.time,
+        amount,
+        cumulative: previousTotal + amount,
+      });
+      return series;
+    },
+    []
+  );
+  const topCategoryData = [...categoryData].sort((a, b) => b.value - a.value);
+
+  const getPaymentMethodLabel = (method: string): string => {
+    const normalized = (method || '').trim().toLowerCase();
+    if (normalized === 'cash') return 'Cash Payment';
+    if (normalized === 'card' || normalized === 'credit/debit card' || normalized === 'credit card') return 'Card Payment';
+    if (normalized === 'mobile' || normalized === 'gcash' || normalized === 'gcash / mobile') return 'Mobile Payment';
+    if (normalized === 'split') return 'Split Payment';
+    return method;
+  };
 
   return (
     <div className="dashboard-view dashboard-rise-up">
@@ -141,15 +162,21 @@ const DashboardView: React.FC<DashboardViewProps> = ({ transactions }) => {
 
         {/* ── Charts & Cards Grid ── */}
         <div className="dashboard-main-grid">
-          {/* Revenue by Hour Bar Chart */}
-          <div className="content-card dashboard-surface interactive-surface">
+          {/* Intraday Revenue Trends */}
+          <div className="content-card dashboard-surface interactive-surface chart-card">
             <div className="card-head">
-              <h3 className="card-title">Revenue by Hour</h3>
+              <h3 className="card-title">Intraday Revenue Trends</h3>
             </div>
 
             <div className="dashboard-chart-wrap">
               <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={revenueByHour}>
+                <AreaChart data={intradayTrendData} margin={{ top: 12, right: 14, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="intradayRevenueFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#01a2ad" stopOpacity={0.34} />
+                      <stop offset="95%" stopColor="#01a2ad" stopOpacity={0.04} />
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#dbe4ef" />
                   <XAxis
                     dataKey="time"
@@ -161,9 +188,13 @@ const DashboardView: React.FC<DashboardViewProps> = ({ transactions }) => {
                     axisLine={false}
                     tickLine={false}
                     tick={{ fontSize: 12, fontWeight: 600, fill: '#5b6b82' }}
+                    tickFormatter={(value) => formatCurrency(Number(value))}
                   />
                   <Tooltip
-                    cursor={{ fill: '#f8fafc' }}
+                    formatter={(value: number, name: string) => [
+                      formatCurrency(Number(value)),
+                      name === 'cumulative' ? 'Cumulative revenue' : 'Hourly revenue',
+                    ]}
                     contentStyle={{
                       borderRadius: '10px',
                       border: '1px solid #dbe4ef',
@@ -171,44 +202,51 @@ const DashboardView: React.FC<DashboardViewProps> = ({ transactions }) => {
                       background: '#ffffff',
                     }}
                   />
-                  <Bar dataKey="amount" radius={[5, 5, 0, 0]} barSize={26}>
-                    {revenueByHour.map((_entry, index) => (
-                      <Cell key={`cell-${index}`} fill={getBarColor(index)} />
-                    ))}
-                  </Bar>
-                </BarChart>
+                  <Area
+                    type="monotone"
+                    dataKey="cumulative"
+                    stroke="#01a2ad"
+                    strokeWidth={3}
+                    fill="url(#intradayRevenueFill)"
+                    activeDot={{ r: 5 }}
+                  />
+                </AreaChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* Sales by Category Pie Chart */}
-          <div className="content-card dashboard-surface interactive-surface">
+          {/* Top Product Categories */}
+          <div className="content-card dashboard-surface interactive-surface chart-card">
             <div className="card-head">
-              <h3 className="card-title">Sales by Category</h3>
+              <h3 className="card-title">Top Product Categories</h3>
             </div>
 
             <div className="dashboard-chart-wrap">
               <ResponsiveContainer width="100%" height={260}>
-                <PieChart>
-                  <Pie
-                    data={categoryData}
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={72}
-                    dataKey="value"
-                    labelLine={true}
-                    label={({ name, percent }: { name: string; percent: number }) =>
-                      `${name} ${(percent * 100).toFixed(0)}%`
-                    }
-                  >
-                    {categoryData.map((_entry, index) => (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={chartSeriesColors[index % chartSeriesColors.length]}
-                      />
-                    ))}
-                  </Pie>
+                <BarChart
+                  data={topCategoryData}
+                  layout="vertical"
+                  margin={{ top: 8, right: 22, left: 18, bottom: 8 }}
+                  barCategoryGap={14}
+                >
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#dbe4ef" />
+                  <XAxis
+                    type="number"
+                    axisLine={false}
+                    tickLine={false}
+                    allowDecimals={false}
+                    tick={{ fontSize: 12, fontWeight: 600, fill: '#5b6b82' }}
+                  />
+                  <YAxis
+                    dataKey="name"
+                    type="category"
+                    axisLine={false}
+                    tickLine={false}
+                    width={132}
+                    tick={{ fontSize: 12, fontWeight: 700, fill: '#1b2a47' }}
+                  />
                   <Tooltip
+                    formatter={(value: number) => [`${value} sold`, 'Volume']}
                     contentStyle={{
                       borderRadius: '10px',
                       border: '1px solid #dbe4ef',
@@ -216,8 +254,15 @@ const DashboardView: React.FC<DashboardViewProps> = ({ transactions }) => {
                       background: '#ffffff',
                     }}
                   />
-                  <Legend verticalAlign="bottom" iconSize={10} />
-                </PieChart>
+                  <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={18}>
+                    {topCategoryData.map((_entry, index) => (
+                      <Cell
+                        key={`category-cell-${index}`}
+                        fill={chartSeriesColors[index % chartSeriesColors.length]}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
@@ -265,7 +310,7 @@ const DashboardView: React.FC<DashboardViewProps> = ({ transactions }) => {
                   <div className="txn-info-right">
                     <p className="txn-amount">{txn.amount}</p>
                     <p className={`txn-method ${getMethodPillClass(txn.method)}`}>
-                      {txn.method}
+                      {getPaymentMethodLabel(txn.method)}
                     </p>
                   </div>
                 </div>
