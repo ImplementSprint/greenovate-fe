@@ -1,13 +1,18 @@
 'use client';
 
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { ArrowLeft } from 'lucide-react';
 import { Product } from '../data/products';
 import searchIcon from '../assets/images/search_icon.png';
 import deleteIcon from '../assets/images/delete_icon.png';
 import cartIcon from '../assets/images/cart.png';
 import StockAlert from './StockAlert';
+import ScannedItemRow from './ScannedItemRow';
 import { formatCurrency } from '../utils/numberformatters';
 import { productApi } from '../services/productApi';
+import { DiscountValidationResult } from '../services/discountApi';
+import { TaxDiscountBreakdown } from '../utils/vatCalculator';
+import { SuggestedAddonsWidget } from './SuggestedAddonsWidget';
 
 interface CartItem extends Product {
   quantity: number;
@@ -20,6 +25,7 @@ interface POSViewProps {
     available_stock?: number;
     reserved_transfer_qty?: number;
   })[];
+  allProducts: Product[];
   searchQuery: string;
   setSearchQuery: (value: string) => void;
   categories: string[];
@@ -30,6 +36,15 @@ interface POSViewProps {
   subtotal: number;
   tax: number;
   total: number;
+  finalTotal: number;
+  taxBreakdown: TaxDiscountBreakdown;
+  discountCode: string;
+  setDiscountCode: (value: string) => void;
+  discountResult: DiscountValidationResult | null;
+  discountError: string | null;
+  isDiscountValidating: boolean;
+  validateDiscountCode: () => Promise<void>;
+  resetDiscount: () => void;
   handleProceedToPayment: () => void;
   onHoldCart: () => void;
   onViewHeld: () => void;
@@ -49,6 +64,7 @@ const POSView: React.FC<POSViewProps> = ({
   cart,
   setCart,
   filteredProducts,
+  allProducts,
   searchQuery,
   setSearchQuery,
   categories,
@@ -57,8 +73,16 @@ const POSView: React.FC<POSViewProps> = ({
   addToCart,
   updateQty,
   subtotal,
-  tax,
   total,
+  finalTotal,
+  taxBreakdown,
+  discountCode,
+  setDiscountCode,
+  discountResult,
+  discountError,
+  isDiscountValidating,
+  validateDiscountCode,
+  resetDiscount,
   handleProceedToPayment,
   onHoldCart,
   onViewHeld,
@@ -72,6 +96,8 @@ const POSView: React.FC<POSViewProps> = ({
   const [onConfirm, setOnConfirm] = useState<() => void>(() => () => {});
   const [showCategoryPage, setShowCategoryPage] = useState(true);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [scanInput, setScanInput] = useState('');
+  const [scanMessage, setScanMessage] = useState<string | null>(null);
 
   // ── T1: Debounced search state ──
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -81,6 +107,10 @@ const POSView: React.FC<POSViewProps> = ({
 
   // ── T2: Stock fetch loading state ──
   const [stockFetchingId, setStockFetchingId] = useState<number | string | null>(null);
+
+  // ── Task 1: Category search and All Products ──
+  const [categorySearch, setCategorySearch] = useState('');
+  const [showAllProducts, setShowAllProducts] = useState(false);
 
   // Helper to format text to Capital Each Word
   const toTitleCase = (str: string) => {
@@ -116,8 +146,10 @@ const POSView: React.FC<POSViewProps> = ({
   };
 
   const categoryButtons = useMemo(
-    () => categories.filter((cat) => cat.toLowerCase() !== 'all'),
-    [categories]
+    () => categories
+      .filter((cat) => cat.toLowerCase() !== 'all')
+      .filter((cat) => cat.toLowerCase().includes(categorySearch.toLowerCase())),
+    [categories, categorySearch]
   );
 
   // ── T1: Debounced product search with API integration ──
@@ -209,11 +241,62 @@ const POSView: React.FC<POSViewProps> = ({
     }
   }, [addToCart]);
 
+  const handleScanSubmit = () => {
+    const trimmed = scanInput.trim();
+    if (!trimmed) {
+      setScanMessage('Enter a product code or name to scan.');
+      return;
+    }
+
+    const scannedProduct = filteredProducts.find(
+      (product) => product.barcode === trimmed || product.name.toLowerCase() === trimmed.toLowerCase() || String(product.id) === trimmed
+    );
+
+    if (scannedProduct) {
+      addToCart(scannedProduct);
+      setScanMessage(`Added ${scannedProduct.name} to cart.`);
+      setScanInput('');
+      return;
+    }
+
+    setScanMessage('No matching item for the scanned code.');
+  };
+
   // Determine which products to display:
   // If search returned API results, show those (filtered by category if active).
   // If search had an error, fall back to the local filteredProducts.
   // If no search query, use local filteredProducts.
   const visibleProducts = useMemo(() => {
+    // If showing all products, ignore activeCategory filter
+    if (showAllProducts) {
+      // If we have API search results, use them
+      if (searchResults !== null && searchQuery.trim()) {
+        // Build a lookup from local products so we can restore images
+        const localProductMap = new Map(
+          filteredProducts.map((p) => [String(p.id), p])
+        );
+
+        return searchResults
+          .filter((product) =>
+            product.name.toLowerCase().includes(searchQuery.toLowerCase())
+          )
+          .map((product) => {
+            // Merge image from local data since API results don't include it
+            const localProduct = localProductMap.get(String(product.id));
+            return {
+              ...product,
+              image: product.image || localProduct?.image || null,
+            };
+          });
+      }
+
+      // Local fallback - show all products
+      return filteredProducts.filter((product) =>
+        product.name.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+
+    // Normal category filtering
     if (!activeCategory) return [];
 
     // If we have API search results, use them (filtered by active category)
@@ -244,7 +327,7 @@ const POSView: React.FC<POSViewProps> = ({
       .filter((product) =>
         product.name.toLowerCase().includes(searchQuery.toLowerCase())
       );
-  }, [filteredProducts, activeCategory, searchQuery, searchResults]);
+  }, [filteredProducts, activeCategory, searchQuery, searchResults, showAllProducts]);
 
   return (
     <main className="pos-content">
@@ -267,6 +350,95 @@ const POSView: React.FC<POSViewProps> = ({
               </p>
             </div>
 
+            {/* Task 1: Category Search Bar */}
+            <div
+              style={{
+                marginBottom: '24px',
+                height: '48px',
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center'
+              }}
+            >
+              <img 
+                src={getImgSrc(searchIcon) || ''} 
+                alt="" 
+                style={{ 
+                  position: 'absolute', 
+                  left: '16px', 
+                  width: '18px', 
+                  height: '18px', 
+                  opacity: 0.4,
+                  transition: 'opacity 0.2s',
+                  pointerEvents: 'none' 
+                }} 
+              />
+              <input
+                type="text"
+                placeholder="Search categories..."
+                value={categorySearch}
+                onChange={(e) => setCategorySearch(e.target.value)}
+                style={{ 
+                  height: '100%', 
+                  width: '100%',
+                  borderRadius: '12px',
+                  border: '1px solid #e2e8f0',
+                  boxShadow: 'none',
+                  padding: '0 16px 0 44px',
+                  fontSize: '0.95rem',
+                  outline: 'none',
+                  background: '#ffffff',
+                  transition: 'all 0.2s ease'
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#01a2ad';
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(1, 162, 173, 0.1)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#e2e8f0';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              />
+            </div>
+
+            {/* Task 1: All Products Button */}
+            <div
+              style={{
+                marginBottom: '24px',
+              }}
+            >
+              <button
+                onClick={() => {
+                  setShowAllProducts(true);
+                  setActiveCategory('All');
+                  setShowCategoryPage(false);
+                }}
+                style={{
+                  padding: '16px 24px',
+                  borderRadius: '12px',
+                  fontSize: '1rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #01a2ad 0%, #008a96 100%)',
+                  color: '#ffffff',
+                  boxShadow: '0 4px 12px rgba(1, 162, 173, 0.3)',
+                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                  width: '100%',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 8px 20px rgba(1, 162, 173, 0.4)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(1, 162, 173, 0.3)';
+                }}
+              >
+                All Products
+              </button>
+            </div>
+
             <div
               className="category-grid-container"
               style={{
@@ -275,50 +447,56 @@ const POSView: React.FC<POSViewProps> = ({
                 gap: '20px',
               }}
             >
-              {categoryButtons.map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => {
-                    setActiveCategory(cat);
-                    setShowCategoryPage(false);
-                  }}
-                  className={`category-card-btn ${activeCategory === cat ? 'active' : ''}`}
-                  style={{
-                    padding: '30px 20px',
-                    borderRadius: '16px',
-                    fontSize: '1.1rem',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    border: activeCategory === cat ? '2px solid #01a2ad' : '1px solid #e2e8f0',
-                    background: activeCategory === cat ? '#01a2ad' : '#ffffff',
-                    color: activeCategory === cat ? '#ffffff' : '#1b2a47',
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)',
-                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    textAlign: 'center',
-                    // Changed from uppercase to Title Case
-                    letterSpacing: '0.5px'
-                  }}
-                  onMouseEnter={(e) => {
-                    if (activeCategory !== cat) {
-                      e.currentTarget.style.transform = 'translateY(-4px)';
-                      e.currentTarget.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.1)';
-                      e.currentTarget.style.borderColor = '#01a2ad';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (activeCategory !== cat) {
-                      e.currentTarget.style.transform = 'translateY(0)';
-                      e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.05)';
-                      e.currentTarget.style.borderColor = '#e2e8f0';
-                    }
-                  }}
-                >
-                  {toTitleCase(cat)}
-                </button>
-              ))}
+              {categoryButtons.length === 0 ? (
+                <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px 20px', color: '#888' }}>
+                  <p style={{ fontSize: '1rem', margin: 0 }}>No categories match your search.</p>
+                </div>
+              ) : (
+                categoryButtons.map((cat) => (
+                  <button
+                    key={cat}
+                    onClick={() => {
+                      setActiveCategory(cat);
+                      setShowCategoryPage(false);
+                      setShowAllProducts(false);
+                    }}
+                    className={`category-card-btn ${activeCategory === cat ? 'active' : ''}`}
+                    style={{
+                      padding: '30px 20px',
+                      borderRadius: '16px',
+                      fontSize: '1.1rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: activeCategory === cat ? '2px solid #01a2ad' : '1px solid #e2e8f0',
+                      background: activeCategory === cat ? '#01a2ad' : '#ffffff',
+                      color: activeCategory === cat ? '#ffffff' : '#1b2a47',
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)',
+                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textAlign: 'center',
+                      letterSpacing: '0.5px'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (activeCategory !== cat) {
+                        e.currentTarget.style.transform = 'translateY(-4px)';
+                        e.currentTarget.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.1)';
+                        e.currentTarget.style.borderColor = '#01a2ad';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activeCategory !== cat) {
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.05)';
+                        e.currentTarget.style.borderColor = '#e2e8f0';
+                      }
+                    }}
+                  >
+                    {toTitleCase(cat)}
+                  </button>
+                ))
+              )}
             </div>
           </div>
         ) : (
@@ -335,6 +513,7 @@ const POSView: React.FC<POSViewProps> = ({
               <button
                 onClick={() => {
                   setShowCategoryPage(true);
+                  setShowAllProducts(false);
                   setActiveCategory('');
                   setSearchQuery('');
                   setSearchResults(null);
@@ -343,6 +522,7 @@ const POSView: React.FC<POSViewProps> = ({
                 style={{
                   display: 'flex',
                   alignItems: 'center',
+                  gap: '8px',
                   padding: '0 24px',
                   borderRadius: '12px',
                   background: '#01a2ad',
@@ -356,12 +536,13 @@ const POSView: React.FC<POSViewProps> = ({
                 onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
                 onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
               >
-                ← Back to Categories
+                <ArrowLeft size={18} strokeWidth={2.5} aria-hidden="true" />
+                <span>Back to Categories</span>
               </button>
 
               <div style={{ flex: 1, height: '100%', position: 'relative', display: 'flex', alignItems: 'center' }}>
                 <img 
-                  src={getImgSrc(searchIcon)} 
+                  src={getImgSrc(searchIcon) || ''} 
                   alt="" 
                   style={{ 
                     position: 'absolute', 
@@ -375,7 +556,7 @@ const POSView: React.FC<POSViewProps> = ({
                 />
                 <input
                   type="text"
-                  placeholder={`Search in ${toTitleCase(activeCategory)}...`}
+                  placeholder={`Search in ${showAllProducts ? 'All Products' : toTitleCase(activeCategory)}...`}
                   value={searchQuery}
                   onFocus={() => setIsSearchFocused(true)}
                   onBlur={() => setIsSearchFocused(false)}
@@ -393,7 +574,6 @@ const POSView: React.FC<POSViewProps> = ({
                     transition: 'all 0.2s ease'
                   }}
                 />
-                {/* T1: Search loading indicator */}
                 {searchLoading && (
                   <div style={{
                     position: 'absolute',
@@ -407,6 +587,32 @@ const POSView: React.FC<POSViewProps> = ({
                   }} />
                 )}
               </div>
+            </div>
+
+            <div className="scan-panel">
+              <div className="scan-panel-header">
+                <h3>Scan / Add Item</h3>
+                <p>Use barcode entry or item code for fast checkout.</p>
+              </div>
+              <div className="scan-panel-controls">
+                <input
+                  type="text"
+                  value={scanInput}
+                  onChange={(e) => setScanInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleScanSubmit();
+                    }
+                  }}
+                  placeholder="Scan barcode, enter item name or ID"
+                />
+                <button type="button" className="scan-btn" onClick={handleScanSubmit}>
+                  Add Item
+                </button>
+              </div>
+              {scanMessage && (
+                <p className="scan-message">{scanMessage}</p>
+              )}
             </div>
 
             {/* T4: API failure fallback banner */}
@@ -444,7 +650,7 @@ const POSView: React.FC<POSViewProps> = ({
               </div>
             )}
 
-            {!activeCategory ? (
+            {!activeCategory && !showAllProducts ? (
               <div className="empty-cart-state" style={{ textAlign: 'center', padding: '40px 20px', color: '#888' }}>
                 <h3 style={{ fontSize: '1.2rem', margin: '0 0 5px 0' }}>No category selected</h3>
                 <p style={{ fontSize: '0.9rem', margin: 0 }}>Click a category to show its medicine items.</p>
@@ -454,7 +660,9 @@ const POSView: React.FC<POSViewProps> = ({
                 {visibleProducts.length === 0 ? (
                   <div className="empty-cart-state" style={{ textAlign: 'center', padding: '40px 20px', color: '#888' }}>
                     <h3 style={{ fontSize: '1.2rem', margin: '0 0 5px 0' }}>No products found</h3>
-                    <p style={{ fontSize: '0.9rem', margin: 0 }}>No items available under {toTitleCase(activeCategory)}.</p>
+                    <p style={{ fontSize: '0.9rem', margin: 0 }}>
+                      {showAllProducts ? 'No available medicine products match your search.' : `No items available under ${toTitleCase(activeCategory)}.`}
+                    </p>
                   </div>
                 ) : (
                   visibleProducts.map((product) => (
@@ -470,7 +678,7 @@ const POSView: React.FC<POSViewProps> = ({
                       }}
                     >
                       <div className="img-container">
-                        <img src={getImgSrc(product.image)} alt={product.name} />
+                        <img src={getImgSrc(product.image) || ''} alt={product.name} />
                         {/* T2: Stock fetch loading overlay */}
                         {stockFetchingId === product.id && (
                           <div style={{
@@ -547,91 +755,92 @@ const POSView: React.FC<POSViewProps> = ({
         <div className="cart-list">
           {cart.length === 0 ? (
             <div className="empty-cart-state" style={{ textAlign: 'center', padding: '40px 20px', color: '#888', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <img src={getImgSrc(cartIcon)} alt="Cart" style={{ width: '60px', marginBottom: '15px', opacity: 0.4 }} />
+              <img src={getImgSrc(cartIcon) || ''} alt="Cart" style={{ width: '60px', marginBottom: '15px', opacity: 0.4 }} />
               <h3 style={{ fontSize: '1rem', margin: '0' }}>Cart is empty</h3>
             </div>
           ) : (
             cart.map((item) => (
-              <div 
-                key={item.id} 
-                className="cart-item" 
-                style={{ 
-                  display: 'flex', 
-                  flexDirection: 'column', 
-                  padding: '20px 16px',
-                  borderBottom: '1px solid #f1f5f9',
-                  gap: '2px'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <h4 className="cart-item-name" style={{ margin: 0, fontSize: '0.95rem', fontWeight: '600', color: '#1b2a47' }}>
-                    {item.name}
-                  </h4>
-                  <button 
-                    className="delete-item-btn" 
-                    style={{ 
-                      background: 'transparent', 
-                      border: 'none', 
-                      cursor: 'pointer', 
-                      padding: '6px',
-                      borderRadius: '8px',
-                      transition: 'background 0.2s ease',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#fee2e2'}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                    onClick={() => openConfirm({
-                      title: 'Remove Item',
-                      message: `Remove "${item.name}"?`,
-                      confirmAction: () => setCart(cart.filter((i) => i.id !== item.id)),
-                    })}
-                  >
-                    <img src={getImgSrc(deleteIcon)} alt="Delete" style={{ width: '18px', height: '18px' }} />
-                  </button>
-                </div>
-
-                <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: '-2px 0 2px 0' }}>{toTitleCase(item.category)}</p>
-
-                <p style={{ fontSize: '0.85rem', color: '#1b2a47', fontWeight: '500', marginBottom: '10px' }}>
-                  {formatCurrency(item.price)}
-                </p>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div className="qty-controls" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <button 
-                       onClick={() => updateQty(item.id, -1)}
-                       style={{ width: '30px', height: '30px', borderRadius: '6px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer' }}
-                    >-</button>
-                    <span style={{ fontWeight: '600', fontSize: '0.95rem' }}>{item.quantity}</span>
-                    <button 
-                       onClick={() => updateQty(item.id, 1)}
-                       style={{ width: '30px', height: '30px', borderRadius: '6px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer' }}
-                    >+</button>
-                  </div>
-                  <p className="item-total" style={{ margin: 0, fontSize: '1.05rem', fontWeight: '700', color: '#1b2a47' }}>
-                    {formatCurrency(item.price * item.quantity)}
-                  </p>
-                </div>
-              </div>
+              <ScannedItemRow
+                key={item.id}
+                item={item}
+                updateQty={updateQty}
+                removeItem={(id) => setCart(cart.filter((i) => i.id !== id))}
+              />
             ))
+          )}
+        </div>
+
+        <SuggestedAddonsWidget 
+          cart={cart} 
+          allProducts={allProducts} 
+          onAddToCart={addToCart} 
+        />
+
+        <div className="discount-card">
+          <div className="discount-header">
+            <h3>Discount / Compliance</h3>
+            <p>Apply promotion or compliance discounts before payment.</p>
+          </div>
+          <div className="discount-input-row">
+            <input
+              type="text"
+              value={discountCode}
+              onChange={(e) => setDiscountCode(e.target.value)}
+              placeholder="Enter discount code"
+              className="discount-input"
+            />
+            <button
+              type="button"
+              className="discount-action-btn"
+              onClick={validateDiscountCode}
+              disabled={isDiscountValidating || !discountCode.trim()}
+            >
+              {isDiscountValidating ? 'Validating...' : 'Apply'}
+            </button>
+          </div>
+          {discountError && <p className="discount-error">{discountError}</p>}
+          {discountResult?.valid && (
+            <div className="discount-summary">
+              <span>{discountResult.discountType || 'Discount'}</span>
+              <strong>{discountResult.discountPercent ? `${discountResult.discountPercent}% off` : 'Discount applied'}</strong>
+              <button type="button" className="discount-clear" onClick={resetDiscount}>Clear</button>
+            </div>
           )}
         </div>
 
         <div className="billing-summary">
           <div className="bill-row">
-            <span>Subtotal:</span>
-            <span>{formatCurrency(subtotal)}</span>
+            <span>VATable Sales:</span>
+            <span>{formatCurrency(taxBreakdown.vatableSales)}</span>
           </div>
+          {taxBreakdown.isVatExempt && (
+            <div className="bill-row">
+              <span>VAT-Exempt Sales:</span>
+              <span>{formatCurrency(taxBreakdown.vatExemptSales)}</span>
+            </div>
+          )}
           <div className="bill-row">
-            <span>Tax (12%):</span>
-            <span>{formatCurrency(tax)}</span>
+            <span>VAT (12%):</span>
+            <span>{formatCurrency(taxBreakdown.vatAmount)}</span>
           </div>
-          <hr style={{ border: 'none', borderTop: '1px solid #e2e8f0', margin: '12px 0' }} />
+          {discountResult?.valid && discountResult.discountPercent ? (
+            <>
+              {taxBreakdown.vatDeduction > 0 && (
+                <div className="bill-row discount-row">
+                  <span>VAT Discount/Deduction:</span>
+                  <span>-{formatCurrency(taxBreakdown.vatDeduction)}</span>
+                </div>
+              )}
+              <div className="bill-row discount-row">
+                <span>Discount:</span>
+                <span>-{formatCurrency(taxBreakdown.discountAmount)}</span>
+              </div>
+            </>
+          ) : null}
+          <hr />
           <div className="bill-row total">
-            <span>Total:</span>
-            <span style={{ color: '#1b2a47' }}>{formatCurrency(total)}</span>
+            <span>Payable Total:</span>
+            <span>{formatCurrency(finalTotal)}</span>
           </div>
           <button
             className="pay-btn"
@@ -641,20 +850,15 @@ const POSView: React.FC<POSViewProps> = ({
               background: '#01a2ad',
               opacity: cart.length === 0 ? 0.5 : 1,
               cursor: cart.length === 0 ? 'not-allowed' : 'pointer',
-              marginBottom: '8px'
+              marginBottom: '10px'
             }}
           >
             Proceed to Payment
           </button>
           <button
-            className="pay-btn"
+            className="pay-btn secondary"
             onClick={onHoldCart}
             disabled={cart.length === 0}
-            style={{
-              background: '#1b2a47',
-              opacity: cart.length === 0 ? 0.5 : 1,
-              cursor: cart.length === 0 ? 'not-allowed' : 'pointer',
-            }}
           >
             Hold Order
           </button>
