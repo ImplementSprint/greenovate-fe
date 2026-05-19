@@ -4,7 +4,7 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, ShoppingBag, X, MapPin } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
-import { buildApiUrl } from '@/lib/api';
+import { fetchJsonWithRetry } from '@/lib/api';
 import { Product } from '../types';
 
 const partnerBrands = [
@@ -14,11 +14,41 @@ const partnerBrands = [
 
 const getPartnerBrandKey = (brand: string, list: 'primary' | 'duplicate') => `${list}-${brand}`;
 
+const normalizeProducts = (products: Product[]) => {
+  const seen = new Set<string>();
+
+  return products.filter((product) => {
+    const signature = [
+      product.id?.trim() || 'missing-id',
+      product.name?.trim() || 'missing-name',
+      product.category?.trim() || 'missing-category',
+      String(product.price ?? ''),
+    ].join('|');
+
+    if (seen.has(signature)) {
+      return false;
+    }
+
+    seen.add(signature);
+    return true;
+  });
+};
+
+const getProductRenderKey = (product: Product, idx: number) =>
+  [
+    product.id?.trim() || 'missing-id',
+    product.name?.trim() || 'missing-name',
+    product.category?.trim() || 'missing-category',
+    idx,
+  ].join('|');
+
 export default function Home() {
   const {
     setView,
     setIsBranchModalOpen,
     selectedBranch,
+    interestMap,
+    categoryInterestMap,
     branchInventory,
     isLoggedIn,
     addToCart,
@@ -27,6 +57,7 @@ export default function Home() {
   const [featuredProducts, setFeaturedProducts] = React.useState<Product[]>([]);
   const [isLoadingFeatured, setIsLoadingFeatured] = React.useState(true);
   const [featuredError, setFeaturedError] = React.useState('');
+  const [isPersonalized, setIsPersonalized] = React.useState(false);
 
   React.useEffect(() => {
     const controller = new AbortController();
@@ -36,37 +67,44 @@ export default function Home() {
         setIsLoadingFeatured(true);
         setFeaturedError('');
 
-        const params = new URLSearchParams({
-          limit: '4',
-          sortBy: 'popularity',
-        });
+        // Fetch catalog products and user interests in parallel
+        const params = new URLSearchParams({ limit: '20', sortBy: 'popularity' });
+        if (selectedBranch) params.set('branchId', String(selectedBranch.id));
 
-        if (selectedBranch) {
-          params.set('branchId', String(selectedBranch.id));
+        const catalogPayload = await fetchJsonWithRetry<{ data?: Product[] }>(
+          `/api/products?${params.toString()}`,
+          { signal: controller.signal },
+        );
+
+        const fetched = normalizeProducts(catalogPayload?.data ?? []);
+
+        if (interestMap.size > 0 || categoryInterestMap.size > 0) {
+          const sorted = [...fetched].sort((a, b) => {
+            const catA = (categoryInterestMap.get(a.category) ?? 0) * 100;
+            const catB = (categoryInterestMap.get(b.category) ?? 0) * 100;
+            const prodA = (interestMap.get(a.id) ?? 0) * 10;
+            const prodB = (interestMap.get(b.id) ?? 0) * 10;
+            return (catB + prodB) - (catA + prodA);
+          });
+          setFeaturedProducts(sorted.slice(0, 4));
+          setIsPersonalized(true);
+        } else {
+          setFeaturedProducts(fetched.slice(0, 4));
+          setIsPersonalized(false);
         }
-
-        const response = await fetch(buildApiUrl(`/api/products?${params.toString()}`), {
-          signal: controller.signal,
-        });
-        const payload = await response.json();
-
-        if (!response.ok) {
-          throw new Error(payload.error || 'Failed to load featured products.');
-        }
-
-        setFeaturedProducts((payload.data ?? []).slice(0, 4));
       } catch (error) {
-        if ((error as Error).name === 'AbortError') {
-          return;
+        if ((error as Error).name === 'AbortError') return;
+        // Silently ignore network errors (TypeError: Failed to fetch) and 502/503
+        // — these all mean the backend services are still starting up.
+        const status = (error as { status?: number }).status;
+        const isStartupError = error instanceof TypeError || status === 503 || status === 502;
+        if (!isStartupError) {
+          console.error('Featured products fetch failed:', error);
+          setFeaturedError('Unable to load featured products right now.');
         }
-
-        console.error('Featured products fetch failed:', error);
         setFeaturedProducts([]);
-        setFeaturedError('Unable to load featured products right now.');
       } finally {
-        if (!controller.signal.aborted) {
-          setIsLoadingFeatured(false);
-        }
+        if (!controller.signal.aborted) setIsLoadingFeatured(false);
       }
     }
 
@@ -134,8 +172,12 @@ export default function Home() {
         <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-end justify-between mb-12">
             <div>
-              <h2 className="text-3xl font-black text-slate-900 tracking-tight mb-2">Featured Products</h2>
-              <p className="text-slate-500 font-medium">Handpicked essentials for your daily needs.</p>
+              <h2 className="text-3xl font-black text-slate-900 tracking-tight mb-2">
+                {isPersonalized ? 'Your Top Picks' : 'Featured Products'}
+              </h2>
+              <p className="text-slate-500 font-medium">
+                {isPersonalized ? 'Based on what you\'ve been browsing.' : 'Handpicked essentials for your daily needs.'}
+              </p>
             </div>
             <button
               onClick={() => setView('shop')}
@@ -167,7 +209,7 @@ export default function Home() {
 
               return (
                 <motion.div
-                  key={product.id}
+                  key={getProductRenderKey(product, idx)}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: idx * 0.1 }}

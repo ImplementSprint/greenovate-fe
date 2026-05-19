@@ -1,10 +1,11 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, MapPin, Clock } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
+import { Branch } from '../types';
 
 const getBranchCardClassName = (isOpen: boolean, isSelected: boolean) => {
   if (isOpen && isSelected) {
@@ -19,20 +20,23 @@ const getBranchCardClassName = (isOpen: boolean, isSelected: boolean) => {
 };
 
 export default function BranchModal() {
-  const { 
+  const {
     isBranchModalOpen, setIsBranchModalOpen,
     branches,
     selectedBranch, setSelectedBranch,
-    setCart,
+    cart, setCart,
     isBranchOpen
   } = useAppContext();
+
+  const [pendingBranch, setPendingBranch] = useState<Branch | null>(null);
+  const safeBranches = Array.isArray(branches) ? branches : [];
 
   useBodyScrollLock(isBranchModalOpen);
 
   return (
     <AnimatePresence>
       {isBranchModalOpen && (
-        <>
+        <React.Fragment key="branch-selector-modal">
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -61,7 +65,7 @@ export default function BranchModal() {
             
             <div className="p-6 overflow-y-auto">
               <div className="grid gap-4">
-                {branches.map(branch => {
+                {safeBranches.map(branch => {
                   const isOpen = isBranchOpen(branch);
                   const isSelected = selectedBranch?.id === branch.id;
                   
@@ -71,9 +75,11 @@ export default function BranchModal() {
                       key={branch.id}
                       onClick={() => {
                         if (!isOpen) return;
-                        if (selectedBranch?.id !== branch.id) {
-                          setCart([]);
+                        if (selectedBranch?.id !== branch.id && cart.length > 0) {
+                          setPendingBranch(branch);
+                          return;
                         }
+                        if (selectedBranch?.id !== branch.id) setCart([]);
                         setSelectedBranch(branch);
                         setIsBranchModalOpen(false);
                       }}
@@ -114,8 +120,57 @@ export default function BranchModal() {
               </div>
             </div>
           </motion.div>
-        </>
+        </React.Fragment>
       )}
+
+      {/* Cart-clear confirmation when switching branches */}
+      <AnimatePresence>
+        {pendingBranch && (
+          <React.Fragment key={`branch-confirm-${pendingBranch.id}`}>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60]"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white rounded-3xl shadow-2xl z-[70] overflow-hidden"
+            >
+              <div className="p-7 text-center">
+                <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-5">
+                  <MapPin className="w-8 h-8 text-amber-600" />
+                </div>
+                <h3 className="text-xl font-black text-slate-900 mb-2 tracking-tight">Switch Branch?</h3>
+                <p className="text-slate-500 text-sm leading-relaxed mb-7">
+                  You have <span className="font-bold text-slate-700">{cart.length} {cart.length === 1 ? 'item' : 'items'}</span> in your cart. Switching to <span className="font-bold text-slate-700">{pendingBranch.name}</span> will clear your cart.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setPendingBranch(null)}
+                    className="flex-1 py-3 bg-slate-100 text-slate-700 rounded-2xl font-bold hover:bg-slate-200 transition-colors"
+                  >
+                    Keep Cart
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCart([]);
+                      setSelectedBranch(pendingBranch);
+                      setPendingBranch(null);
+                      setIsBranchModalOpen(false);
+                    }}
+                    className="flex-1 py-3 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-100"
+                  >
+                    Switch Branch
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </React.Fragment>
+        )}
+      </AnimatePresence>
     </AnimatePresence>
   );
 }
