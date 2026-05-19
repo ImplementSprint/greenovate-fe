@@ -11,7 +11,7 @@ const setupEnvText = `NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PROJECT_ID=your_project_id
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_publishable_key_here
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key_here
-NEXT_PUBLIC_ENABLE_DEMO_AUTH=true
+NEXT_PUBLIC_ENABLE_DEMO_AUTH=false
 NEXT_PUBLIC_FORCE_CUSTOMER_DEMO_AUTH=false`;
 
 if (!hasSupabaseConfig) {
@@ -57,14 +57,14 @@ if (!hasSupabaseConfig) {
           Setup Required
         </div>
         <h1 style={{ margin: "18px 0 12px", fontSize: "clamp(32px, 4vw, 44px)", lineHeight: 1.05 }}>
-          Missing <code>.env.local</code>
+          Missing <code>project .env</code>
         </h1>
         <p style={{ margin: 0, fontSize: "16px", lineHeight: 1.7, color: "#334155" }}>
           {supabaseConfigError}
         </p>
         <p style={{ margin: "14px 0 0", fontSize: "16px", lineHeight: 1.7, color: "#334155" }}>
           This is why the app shows a plain white page on a fresh GitHub clone. The repo was pushed,
-          but <code>.env.local</code> was not included, which is normal because it is ignored by Git.
+          but <code>.env</code> was not included, which is normal because it is ignored by Git.
         </p>
         <div
           style={{
@@ -77,16 +77,16 @@ if (!hasSupabaseConfig) {
           }}
         >
           <div style={{ marginBottom: "10px", fontSize: "13px", color: "#7dd3fc", fontWeight: 700 }}>
-            Create this file: <code>.env.local</code>
+            Create this file: <code>.env</code>
           </div>
           <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: "14px", lineHeight: 1.7 }}>
             {setupEnvText}
           </pre>
         </div>
         <div style={{ marginTop: "20px", fontSize: "15px", lineHeight: 1.8, color: "#334155" }}>
-          <div>1. Create <code>.env.local</code> if it does not exist yet.</div>
+          <div>1. Create <code>.env</code> in the project root if it does not exist yet.</div>
           <div>2. Paste the real publishable key and anon key from your Supabase project.</div>
-          <div>3. Restart the local stack and reload <code>http://127.0.0.1:3000</code>.</div>
+          <div>3. Restart <code>npm run dev</code> and reload <code>http://localhost:3000</code>.</div>
         </div>
       </div>
     </div>,

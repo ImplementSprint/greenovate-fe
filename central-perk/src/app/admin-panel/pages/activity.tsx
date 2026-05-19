@@ -46,7 +46,7 @@ function classifyTransactionType(transactionType: string, points: number) {
 }
 
 export default function AdminActivityPage() {
-  const { transactions, loading, error, metrics } = useAdminData({ scope: "activity" });
+  const { transactions, loading, error, metrics } = useAdminData();
   const [activityFilter, setActivityFilter] = useState<"all" | "active" | "warm" | "inactive">("all");
   const [transactionFilter, setTransactionFilter] = useState<TransactionQuickFilter>("all");
   const [transactionRangePreset, setTransactionRangePreset] = useState<TransactionRangePreset>("custom");
@@ -232,7 +232,7 @@ export default function AdminActivityPage() {
       const html = `
         <html>
           <head>
-            <title>CentralPerk Admin Activity Report</title>
+            <title>GREENOVATE Admin Activity Report</title>
             <style>
               body { font-family: Arial, sans-serif; padding: 24px; color: #111827; }
               .brand { display:flex; justify-content:space-between; align-items:center; background:#1A2B47; color:#fff; padding:12px 16px; border-radius:8px; }
@@ -242,7 +242,7 @@ export default function AdminActivityPage() {
             </style>
           </head>
           <body>
-            <div class="brand"><strong>CentralPerk Rewards</strong><span>Admin Activity Report</span></div>
+            <div class="brand"><strong>GREENOVATE Rewards</strong><span>Admin Activity Report</span></div>
             <p>Generated: ${new Date().toLocaleString()}</p>
             <table>
               <thead>

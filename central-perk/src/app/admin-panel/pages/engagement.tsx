@@ -8,6 +8,8 @@ import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
 import { Progress } from "../../../components/ui/progress";
 import { Textarea } from "../../../components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { useAdminData } from "../hooks/use-admin-data";
 import {
   adminDarkButtonClass,
@@ -56,7 +58,15 @@ import {
   type SurveyQuestion,
   type WinBackOfferType,
 } from "../../lib/member-engagement";
-import { loadAllReferrals, loadFeedback, type FeedbackRecord, type ReferralRecord } from "../../lib/member-lifecycle";
+import {
+  generateFeedbackInsights,
+  loadAllReferrals,
+  loadFeedback,
+  loadLatestFeedbackInsights,
+  type FeedbackInsights,
+  type FeedbackRecord,
+  type ReferralRecord,
+} from "../../lib/member-lifecycle";
 
 const tabs = [
   { id: "notifications", label: "Push Notifications", icon: BellRing },
@@ -71,7 +81,7 @@ const triggers: NotificationTrigger[] = ["Points Earned", "Tier Upgrade", "Rewar
 const offerTypes: WinBackOfferType[] = ["2x Points", "Special Discount", "Bonus Reward"];
 
 export default function AdminEngagementPage() {
-  const { members, transactions, loginActivity, loading, error } = useAdminData({ scope: "engagement" });
+  const { members, transactions, loginActivity, loading, error } = useAdminData();
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>("notifications");
   const [state, setState] = useState<EngagementState>(() => loadEngagementState());
   const [campaignName, setCampaignName] = useState("Birthday Loyalty Push");
@@ -112,6 +122,23 @@ export default function AdminEngagementPage() {
     byChannel: {} as Record<string, number>,
     byStatus: {} as Record<string, number>,
   });
+  const [feedbackInsights, setFeedbackInsights] = useState<FeedbackInsights | null>(null);
+  const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
+  const [isInsightsModalOpen, setIsInsightsModalOpen] = useState(false);
+
+  const handleGenerateInsights = async () => {
+    setIsInsightsModalOpen(true);
+    setIsGeneratingInsights(true);
+    try {
+      const insights = await generateFeedbackInsights();
+      setFeedbackInsights(insights);
+      toast.success("Feedback insights generated.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to generate insights.");
+    } finally {
+      setIsGeneratingInsights(false);
+    }
+  };
 
   useEffect(() => {
     saveEngagementState(state);
@@ -125,6 +152,7 @@ export default function AdminEngagementPage() {
         setState((prev) => ({ ...prev, challenges: rows }));
       })
       .catch(() => {
+        // Keep local fallback state when challenge tables are not available.
       });
 
     return () => {
@@ -177,6 +205,7 @@ export default function AdminEngagementPage() {
         setState((prev) => ({ ...prev, notificationCampaigns: rows }));
       })
       .catch(() => {
+        // Keep local fallback state when backend tables are unavailable.
       });
 
     return () => {
@@ -192,6 +221,7 @@ export default function AdminEngagementPage() {
         setState((prev) => ({ ...prev, surveys: rows }));
       })
       .catch(() => {
+        // Keep local fallback state when backend tables are unavailable.
       });
 
     return () => {
@@ -207,6 +237,7 @@ export default function AdminEngagementPage() {
         setState((prev) => ({ ...prev, winBackCampaigns: rows }));
       })
       .catch(() => {
+        // Keep local fallback state when backend tables are unavailable.
       });
 
     return () => {
@@ -246,6 +277,20 @@ export default function AdminEngagementPage() {
 
   useEffect(() => {
     let alive = true;
+    loadLatestFeedbackInsights()
+      .then((insights) => {
+        if (alive) setFeedbackInsights(insights);
+      })
+      .catch(() => {
+        if (alive) setFeedbackInsights(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
     loadAllReferrals()
       .then((items) => {
         if (alive) setReferralItems(items);
@@ -256,6 +301,30 @@ export default function AdminEngagementPage() {
     return () => {
       alive = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const refreshCustomerEngagementSignals = async () => {
+      const [surveyRows, shareRows, feedbackRows, referralRows, challengeRows] = await Promise.all([
+        loadSurveyDefinitions().catch(() => null),
+        loadSocialShareEvents().catch(() => null),
+        loadFeedback().catch(() => null),
+        loadAllReferrals().catch(() => null),
+        loadChallengeDefinitions().catch(() => null),
+      ]);
+
+      if (surveyRows) setState((prev) => ({ ...prev, surveys: surveyRows.length > 0 ? surveyRows : prev.surveys }));
+      if (shareRows) setDbShareEvents(shareRows);
+      if (feedbackRows) setFeedbackItems(feedbackRows);
+      if (referralRows) setReferralItems(referralRows);
+      if (challengeRows && challengeRows.length > 0) setState((prev) => ({ ...prev, challenges: challengeRows }));
+    };
+
+    const interval = window.setInterval(() => {
+      refreshCustomerEngagementSignals().catch(() => undefined);
+    }, 30_000);
+
+    return () => window.clearInterval(interval);
   }, []);
 
   const inactiveMembers = useMemo(
@@ -408,14 +477,10 @@ export default function AdminEngagementPage() {
         }
         toast.success("Push campaign scheduled and communications queued.");
       } else {
-        toast.success("Push campaign saved, but communications queueing is unavailable right now.");
+        toast.warning("Push campaign saved, but communications queueing is unavailable right now.");
       }
-    } catch {
-      setState((prev) => ({
-        ...prev,
-        notificationCampaigns: [nextCampaign, ...prev.notificationCampaigns],
-      }));
-      toast.success("Push campaign saved locally for sprint demo.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save push campaign.");
     }
   };
 
@@ -495,11 +560,9 @@ export default function AdminEngagementPage() {
         ...prev,
         surveys: [savedSurvey ?? nextSurvey, ...prev.surveys],
       }));
-    } catch {
-      setState((prev) => ({
-        ...prev,
-        surveys: [nextSurvey, ...prev.surveys],
-      }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to publish survey.");
+      return;
     }
 
     toast.success("Survey published.");
@@ -564,11 +627,9 @@ export default function AdminEngagementPage() {
         toast.warning(`Win-back automation launched, but ${failedAutomationCount} member sends could not be queued.`);
         return;
       }
-    } catch {
-      setState((prev) => ({
-        ...prev,
-        winBackCampaigns: [nextCampaign, ...prev.winBackCampaigns],
-      }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to launch win-back automation.");
+      return;
     }
     toast.success("Win-back automation launched.");
   };
@@ -757,7 +818,12 @@ export default function AdminEngagementPage() {
             <h3 className="text-lg font-semibold text-[#10213a]">Member Feedback Dashboard</h3>
             <p className="text-sm text-gray-500">Categories: points, rewards, service, app.</p>
           </div>
-          <Badge>{filteredFeedbackItems.length} visible</Badge>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={handleGenerateInsights} disabled={isGeneratingInsights}>
+              {isGeneratingInsights ? "Analyzing" : "Generate Insights"}
+            </Button>
+            <Badge>{filteredFeedbackItems.length} visible</Badge>
+          </div>
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           <div>
@@ -1354,6 +1420,93 @@ export default function AdminEngagementPage() {
           </Card>
         </div>
       ) : null}
+
+      <Dialog open={isInsightsModalOpen} onOpenChange={setIsInsightsModalOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Feedback Insights</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            {isGeneratingInsights ? (
+              <div className="flex min-h-[260px] items-center justify-center rounded-2xl border border-[#dce7f2] bg-[#f8fbff]">
+                <p className="animate-pulse text-sm font-medium text-gray-500">Running cosine similarity analysis...</p>
+              </div>
+            ) : feedbackInsights ? (
+              <div className="grid gap-6 md:grid-cols-2">
+                <div>
+                  <h4 className="mb-4 text-sm font-semibold text-[#10213a]">Sentiment Split</h4>
+                  <div className="h-64 rounded-2xl border border-[#dce7f2] bg-white p-3">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={[
+                            { name: "Positive", value: feedbackInsights.sentimentSplit.positive, color: "#16a34a" },
+                            { name: "Neutral", value: feedbackInsights.sentimentSplit.neutral, color: "#94a3b8" },
+                            { name: "Negative", value: feedbackInsights.sentimentSplit.negative, color: "#ef4444" },
+                          ]}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={56}
+                          outerRadius={82}
+                        >
+                          {["#16a34a", "#94a3b8", "#ef4444"].map((color) => (
+                            <Cell key={color} fill={color} />
+                          ))}
+                        </Pie>
+                        <Tooltip />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <p className="mt-2 text-xs text-gray-500">{feedbackInsights.sourceCount.toLocaleString()} feedback records analyzed.</p>
+                </div>
+                <div className="space-y-5">
+                  <div>
+                    <h4 className="mb-3 text-sm font-semibold text-[#10213a]">Top Similar Themes</h4>
+                    <div className="space-y-2">
+                      {feedbackInsights.topTopics.length > 0 ? (
+                        feedbackInsights.topTopics.map((topic) => (
+                          <div key={topic.topic} className="flex items-center justify-between rounded-xl border border-[#dce7f2] bg-[#f8fbff] p-3 text-sm">
+                            <span className="font-semibold text-[#10213a]">{topic.topic}</span>
+                            <Badge variant="secondary">{topic.count} matches</Badge>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="rounded-xl border border-[#dce7f2] bg-[#f8fbff] p-3 text-sm text-gray-500">No repeated themes yet.</p>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="mb-3 text-sm font-semibold text-[#10213a]">Keyword Cloud</h4>
+                    <div className="flex min-h-[124px] flex-wrap items-center justify-center gap-2 rounded-xl border border-[#dce7f2] bg-[#f8fbff] p-4">
+                      {feedbackInsights.wordCloud.length > 0 ? (
+                        feedbackInsights.wordCloud.map((item) => {
+                          const weights = feedbackInsights.wordCloud.map((word) => word.weight);
+                          const minWeight = Math.min(...weights);
+                          const maxWeight = Math.max(...weights);
+                          const range = maxWeight - minWeight || 1;
+                          const weightRatio = (item.weight - minWeight) / range;
+                          const size = 12 + weightRatio * 20;
+                          return (
+                            <span key={item.word} className="font-semibold leading-none text-[#008c80]" style={{ fontSize: `${size}px`, opacity: 0.65 + weightRatio * 0.35 }}>
+                              {item.word}
+                            </span>
+                          );
+                        })
+                      ) : (
+                        <p className="text-sm text-gray-500">No keywords yet.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="rounded-2xl border border-[#dce7f2] bg-[#f8fbff] p-8 text-center text-sm text-gray-500">No insights generated yet.</p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
