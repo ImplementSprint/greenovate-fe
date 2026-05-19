@@ -13,6 +13,7 @@ type Customer = {
   birthday?: string;
   gender?: string;
   created_at: string;
+  is_admin?: boolean;
 };
 
 export default function AdminCustomersPage() {

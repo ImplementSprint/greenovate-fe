@@ -1754,7 +1754,7 @@ export default function Checkout() {
                     🕒 Order cutoff is {oosSettings.order_cutoff_time}. Your order will be queued for tomorrow.
                   </div>
                 )}
-                {isFreeDelivery && deliveryMethod !== 'claim_at_branch' && (
+                {isFreeDelivery && (
                   <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-xs font-bold text-green-700">
                     🎉 Your order qualifies for <span className="font-black">free delivery!</span>
                   </div>

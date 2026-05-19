@@ -125,9 +125,9 @@ function buildCompare(orders: Order[], yA: number, yB: number) {
     if (o.status === 'Cancelled') continue;
     const d = new Date(o.date);
     const yr = d.getFullYear();
-    if (yr === yA || yr === yB) (rows[d.getMonth()] as Record<string, number>)[yr] += o.total;
+    if (yr === yA || yr === yB) (rows[d.getMonth()] as any)[yr] += o.total;
   }
-  return rows.map(r => ({ ...r, [yA]: Math.round((r as Record<string,number>)[yA]), [yB]: Math.round((r as Record<string,number>)[yB]) }));
+  return rows.map(r => ({ ...r, [yA]: Math.round((r as any)[yA]), [yB]: Math.round((r as any)[yB]) }));
 }
 
 function buildPayment(orders: Order[]) {
@@ -411,7 +411,7 @@ export default function AdminDashboard() {
     return { from: new Date(minY, 0, 1).toISOString(), to: new Date(maxY, 11, 31, 23, 59, 59).toISOString() };
   }, [viewType, year, month, compareYear]);
 
-  const safe = (url: string, token: string) =>
+  const safe = (url: string, token: string): Promise<any> =>
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : {})
       .catch(() => ({}));
@@ -718,7 +718,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(v: number, n: string) => [fmt(v), n]} />
+                  <Tooltip {...TT} formatter={(v: any, n: any) => [fmt(v), n]} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Line type="monotone" dataKey={String(year)}        stroke={C_BLUE}  strokeWidth={2.5} dot={{ r: 3, fill: C_BLUE }}  activeDot={{ r: 5 }} />
                   <Line type="monotone" dataKey={String(compareYear)} stroke={C_SLATE} strokeWidth={2}   dot={{ r: 3, fill: C_SLATE }} activeDot={{ r: 5 }} strokeDasharray="5 4" />
@@ -734,7 +734,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
                   <YAxis tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(v: number) => [fmt(v), 'Revenue']} />
+                  <Tooltip {...TT} formatter={(v: any) => [fmt(v), 'Revenue']} />
                   <Area type="monotone" dataKey="revenue" stroke={C_BLUE} strokeWidth={2} fill="url(#rg)" dot={false} activeDot={{ r: 4, fill: C_BLUE }} />
                 </AreaChart>
               )}
@@ -758,7 +758,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(v: number) => [v, 'Orders']} />
+                  <Tooltip {...TT} formatter={(v: any) => [v, 'Orders']} />
                   <Bar dataKey="orders" fill={C_INDIGO} radius={[4, 4, 0, 0]}>
                     {(timeSeries as { label: string; orders?: number }[]).map((_, i) => (
                       <Cell key={i} fill={i % 2 === 0 ? C_INDIGO : '#818cf8'} />
@@ -805,7 +805,7 @@ export default function AdminDashboard() {
               <ResponsiveContainer width="100%" height={200}>
                 <RadialBarChart cx="50%" cy="50%" innerRadius={50} outerRadius={76} startAngle={90} endAngle={-270} data={radialData}>
                   <RadialBar dataKey="value" cornerRadius={6} />
-                  <Tooltip {...TT} formatter={(v: number) => [`${v}%`, '']} />
+                  <Tooltip {...TT} formatter={(v: any) => [`${v}%`, '']} />
                 </RadialBarChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -827,7 +827,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={115} />
-                  <Tooltip {...TT} formatter={(v: number) => [v, 'Units']} />
+                  <Tooltip {...TT} formatter={(v: any) => [v, 'Units']} />
                   <Bar dataKey="qty" radius={[0, 5, 5, 0]}>
                     {topProducts.map((_, i) => (
                       <Cell key={i} fill={i === 0 ? C_GREEN : i < 3 ? '#22c55e99' : '#86efac'} />
@@ -845,7 +845,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis type="number" tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={90} />
-                  <Tooltip {...TT} formatter={(v: number) => [fmt(v), 'Revenue']} />
+                  <Tooltip {...TT} formatter={(v: any) => [fmt(v), 'Revenue']} />
                   <Bar dataKey="value" radius={[0, 5, 5, 0]}>
                     {categoryData.map((_, i) => <Cell key={i} fill={CHART_PAL[i % CHART_PAL.length]} />)}
                   </Bar>
@@ -876,7 +876,7 @@ export default function AdminDashboard() {
                     <YAxis type="category" dataKey="pair" tick={{ fontSize: 10, fill: '#64748b' }} width={190} />
                     <Tooltip
                       {...TT}
-                      formatter={(value: number) => [value, 'Times bought together']}
+                      formatter={(value: any) => [value, 'Times bought together']}
                       labelFormatter={(_, payload) => {
                         const row = payload?.[0]?.payload as BasketPairRow | undefined;
                         if (!row) return '';
