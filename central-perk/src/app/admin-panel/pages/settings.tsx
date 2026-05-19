@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   DEFAULT_BIRTHDAY_REWARD_SETTINGS,
   loadBirthdayRewardSettings,
+  loadBirthdayRewardSettingsFromApi,
   saveBirthdayRewardSettings,
   type BirthdayRewardSettings,
 } from "../../lib/member-lifecycle";
@@ -39,9 +40,6 @@ export default function AdminSettingsPage() {
   const [earningRules, setEarningRules] = useState<EarningRule[]>(FALLBACK_EARNING_RULES);
   const [birthdaySettings, setBirthdaySettings] = useState<BirthdayRewardSettings>(DEFAULT_BIRTHDAY_REWARD_SETTINGS);
   const [saving, setSaving] = useState(false);
-  const [pendingOtp, setPendingOtp] = useState<string | null>(null);
-  const [otpInput, setOtpInput] = useState("");
-  const [pendingSave, setPendingSave] = useState(false);
 
   useEffect(() => {
     fetchTierRules()
@@ -52,7 +50,9 @@ export default function AdminSettingsPage() {
       .then((data) => setEarningRules(data))
       .catch(() => setEarningRules(FALLBACK_EARNING_RULES));
 
-    setBirthdaySettings(loadBirthdayRewardSettings());
+    loadBirthdayRewardSettingsFromApi()
+      .then((settings) => setBirthdaySettings(settings))
+      .catch(() => setBirthdaySettings(loadBirthdayRewardSettings()));
   }, []);
 
   const updateRule = (tierLabel: string, nextValue: number) => {
@@ -61,6 +61,7 @@ export default function AdminSettingsPage() {
         rule.tier_label.toLowerCase() === tierLabel.toLowerCase()
           ? {
               ...rule,
+              // Bronze is fixed as the base tier at 0 points.
               min_points: tierLabel.toLowerCase() === "bronze" ? 0 : Math.max(0, Math.floor(nextValue || 0)),
             }
           : rule
@@ -79,30 +80,10 @@ export default function AdminSettingsPage() {
   };
 
   const handleSave = async () => {
-    if (!pendingSave) {
-      const generatedOtp = `${Math.floor(100000 + Math.random() * 900000)}`;
-      setPendingOtp(generatedOtp);
-      setOtpInput("");
-      setPendingSave(true);
-      toast.info(`OTP sent to your registered channel: ${generatedOtp}`, {
-        description: "Demo mode OTP. Enter this code to confirm settings changes.",
-      });
-      return;
-    }
-
-    if (!pendingOtp || otpInput.trim() !== pendingOtp) {
-      toast.error("Invalid OTP. Please try again.");
-      return;
-    }
-
     try {
       setSaving(true);
-      await Promise.all([saveTierRules(rules), saveEarningRules(earningRules)]);
-      saveBirthdayRewardSettings(birthdaySettings);
+      await Promise.all([saveTierRules(rules), saveEarningRules(earningRules), saveBirthdayRewardSettings(birthdaySettings)]);
       toast.success("Tier and earning rules saved.");
-      setPendingOtp(null);
-      setOtpInput("");
-      setPendingSave(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to save rules.");
     } finally {
@@ -201,22 +182,8 @@ export default function AdminSettingsPage() {
           className={`${adminPrimaryButtonClass} mt-6 disabled:opacity-70`}
         >
           <Save className="w-4 h-4" />
-          {saving ? "Saving..." : pendingSave ? "Confirm OTP & Save" : "Save Rules"}
+          {saving ? "Saving..." : "Save Rules"}
         </button>
-        {pendingSave ? (
-          <div className={`${adminPanelSoftClass} mt-4`}>
-            <p className="text-sm font-semibold text-gray-700">OTP Confirmation</p>
-            <p className="mt-1 text-xs text-gray-500">Enter the 6-digit OTP shown in the toast to confirm these settings changes.</p>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={otpInput}
-              onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              placeholder="Enter 6-digit OTP"
-              className={`mt-3 ${adminInputClass}`}
-            />
-          </div>
-        ) : null}
       </div>
 
       <div className={adminPanelClass}>
