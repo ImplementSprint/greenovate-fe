@@ -113,6 +113,215 @@ function AdminProfileCard({ profile, initials, fields }: { profile: AdminProfile
   );
 }
 
+async function fetchAdminProfile(token: string) {
+  const response = await fetch('/api/admin/profile', { headers: { Authorization: `Bearer ${token}` } });
+  return response.json();
+}
+
+async function updateAdminProfile(token: string, firstName: string, lastName: string) {
+  const response = await fetch('/api/admin/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ first_name: firstName.trim(), last_name: lastName.trim() }),
+  });
+  return { response, data: await response.json() };
+}
+
+async function changeAdminPassword(token: string, currentPassword: string, newPassword: string) {
+  const response = await fetch('/api/admin/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  return { response, data: await response.json() };
+}
+
+function AdminProfileForms(props: {
+  firstName: string;
+  lastName: string;
+  setFirstName: (value: string) => void;
+  setLastName: (value: string) => void;
+  saving: boolean;
+  nameChanged: boolean;
+  handleSaveProfile: () => void;
+  resetNameFields: () => void;
+  currentPw: string;
+  newPw: string;
+  confirmPw: string;
+  setCurrentPw: (value: string) => void;
+  setNewPw: (value: string) => void;
+  setConfirmPw: (value: string) => void;
+  showCurrent: boolean;
+  setShowCurrent: React.Dispatch<React.SetStateAction<boolean>>;
+  showNew: boolean;
+  setShowNew: React.Dispatch<React.SetStateAction<boolean>>;
+  showConfirm: boolean;
+  setShowConfirm: React.Dispatch<React.SetStateAction<boolean>>;
+  changingPw: boolean;
+  handleChangePassword: () => void;
+}) {
+  const {
+    firstName,
+    lastName,
+    setFirstName,
+    setLastName,
+    saving,
+    nameChanged,
+    handleSaveProfile,
+    resetNameFields,
+    currentPw,
+    newPw,
+    confirmPw,
+    setCurrentPw,
+    setNewPw,
+    setConfirmPw,
+    showCurrent,
+    setShowCurrent,
+    showNew,
+    setShowNew,
+    showConfirm,
+    setShowConfirm,
+    changingPw,
+    handleChangePassword,
+  } = props;
+
+  return (
+    <div className="lg:col-span-2 space-y-4">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+          <div className="p-2 bg-blue-50 rounded-xl">
+            <User className="w-4 h-4 text-blue-600" />
+          </div>
+          <div>
+            <p className="text-sm font-black text-slate-800">Edit Profile</p>
+            <p className="text-xs text-slate-400">Update your display name</p>
+          </div>
+        </div>
+        <div className="px-6 py-5">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">First Name</label>
+              <input
+                type="text"
+                value={firstName}
+                onChange={e => setFirstName(e.target.value)}
+                placeholder="First name"
+                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Last Name</label>
+              <input
+                type="text"
+                value={lastName}
+                onChange={e => setLastName(e.target.value)}
+                placeholder="Last name"
+                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 transition-colors"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-slate-400 mt-2">This name appears in the admin sidebar and top navigation bar.</p>
+
+          <div className="flex items-center gap-3 mt-5 pt-5 border-t border-slate-100">
+            <button
+              onClick={handleSaveProfile}
+              disabled={saving || !firstName.trim() || !lastName.trim() || !nameChanged}
+              className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm shadow-blue-100"
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Save Changes
+            </button>
+            {nameChanged && (
+              <button onClick={resetNameFields}
+                className="px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50 transition-colors">
+                Discard
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+          <div className="p-2 bg-slate-100 rounded-xl">
+            <Lock className="w-4 h-4 text-slate-600" />
+          </div>
+          <div>
+            <p className="text-sm font-black text-slate-800">Change Password</p>
+            <p className="text-xs text-slate-400">Use a secure password with at least 6 characters</p>
+          </div>
+        </div>
+
+        <div className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Current Password</label>
+            <div className="relative">
+              <input type={showCurrent ? 'text' : 'password'} value={currentPw} onChange={e => setCurrentPw(e.target.value)}
+                className="w-full px-4 py-3 pr-12 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 transition-colors"
+                placeholder="Enter current password" />
+              <button type="button" onClick={() => setShowCurrent(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
+                {showCurrent ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">New Password</label>
+              <div className="relative">
+                <input type={showNew ? 'text' : 'password'} value={newPw} onChange={e => setNewPw(e.target.value)}
+                  className="w-full px-4 py-3 pr-12 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 transition-colors"
+                  placeholder="New password" />
+                <button type="button" onClick={() => setShowNew(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
+                  {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Confirm Password</label>
+              <div className="relative">
+                <input type={showConfirm ? 'text' : 'password'} value={confirmPw} onChange={e => setConfirmPw(e.target.value)}
+                  className={`w-full px-4 py-3 pr-12 bg-slate-50 border rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 transition-colors ${
+                    confirmPw
+                      ? newPw === confirmPw
+                        ? 'border-green-400 focus:ring-green-400/20'
+                        : 'border-red-300 focus:ring-red-300/20'
+                      : 'border-slate-200 focus:border-blue-400 focus:ring-blue-400/20'
+                  }`}
+                  placeholder="Confirm password" />
+                <button type="button" onClick={() => setShowConfirm(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
+                  {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {confirmPw && (
+            <p className={`text-xs font-bold flex items-center gap-1.5 ${newPw === confirmPw ? 'text-green-600' : 'text-red-500'}`}>
+              {newPw === confirmPw
+                ? <><CheckCircle2 className="w-3.5 h-3.5" /> Passwords match</>
+                : <><AlertCircle className="w-3.5 h-3.5" /> Passwords do not match</>}
+            </p>
+          )}
+
+          <div className="pt-4 border-t border-slate-100">
+            <button onClick={handleChangePassword}
+              disabled={changingPw || !currentPw || !newPw || !confirmPw}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              {changingPw ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+              Update Password
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminProfilePage() {
   const [profile,    setProfile]    = useState<AdminProfile | null>(null);
   const [loading,    setLoading]    = useState(true);
@@ -137,8 +346,7 @@ export default function AdminProfilePage() {
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
-    fetch('/api/admin/profile', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
+    fetchAdminProfile(token)
       .then(d => { setProfile(d); setFirstName(d.first_name ?? ''); setLastName(d.last_name ?? ''); })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -166,13 +374,8 @@ export default function AdminProfilePage() {
     if (!token || !firstName.trim() || !lastName.trim()) return;
     setSaving(true);
     try {
-      const res = await fetch('/api/admin/profile', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ first_name: firstName.trim(), last_name: lastName.trim() }),
-      });
-      const data = await res.json();
-      if (res.ok) {
+      const { response, data } = await updateAdminProfile(token, firstName, lastName);
+      if (response.ok) {
         syncProfileState(data);
         const fullName = getAdminDisplayName(data);
         storeAdminDisplayName(fullName);
@@ -194,13 +397,8 @@ export default function AdminProfilePage() {
     if (!token) return;
     setChangingPw(true);
     try {
-      const res = await fetch('/api/admin/change-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ currentPassword: currentPw, newPassword: newPw }),
-      });
-      const data = await res.json();
-      if (res.ok) {
+      const { response, data } = await changeAdminPassword(token, currentPw, newPw);
+      if (response.ok) {
         showToast('success', 'Password changed successfully.');
         resetPasswordFields();
       } else showToast('error', data?.message ?? data?.error ?? 'Incorrect current password.');
@@ -230,10 +428,31 @@ export default function AdminProfilePage() {
           <AdminProfileCard profile={profile} initials={initials} fields={profileFields} />
         </div>
 
-        {/* RIGHT: Edit forms */}
-        <div className="lg:col-span-2 space-y-4">
-
-          {/* Edit name */}
+        <AdminProfileForms
+          firstName={firstName}
+          lastName={lastName}
+          setFirstName={setFirstName}
+          setLastName={setLastName}
+          saving={saving}
+          nameChanged={nameChanged}
+          handleSaveProfile={handleSaveProfile}
+          resetNameFields={resetNameFields}
+          currentPw={currentPw}
+          newPw={newPw}
+          confirmPw={confirmPw}
+          setCurrentPw={setCurrentPw}
+          setNewPw={setNewPw}
+          setConfirmPw={setConfirmPw}
+          showCurrent={showCurrent}
+          setShowCurrent={setShowCurrent}
+          showNew={showNew}
+          setShowNew={setShowNew}
+          showConfirm={showConfirm}
+          setShowConfirm={setShowConfirm}
+          changingPw={changingPw}
+          handleChangePassword={handleChangePassword}
+        />
+        {false && <div className="lg:col-span-2 space-y-4">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
               <div className="p-2 bg-blue-50 rounded-xl">
@@ -375,7 +594,7 @@ export default function AdminProfilePage() {
             </div>
           </div>
 
-        </div>
+        </div>}
       </div>
     </div>
   );

@@ -23,6 +23,7 @@ type ViewRow    = { product_id: string; category: string; total_views: number };
 type OrderStats = { totalOrders: number; ordersToday: number; pendingOrders: number; todayRevenue: number; pendingReturns: number; processingOrders: number; inTransitOrders: number; deliveredOrders: number; cancelledOrders: number };
 type AuthStats  = { totalCustomers: number; newToday: number };
 type ViewType   = 'overall' | 'month' | 'year' | 'compare';
+type ApiDataResponse<T> = { data?: T };
 type BasketPairRow = {
   pair: string;            // "Antecedent → Consequent" label for chart
   count: number;           // support count (times both appear together)
@@ -61,6 +62,9 @@ const TT = {
   contentStyle: { borderRadius: 10, border: '1px solid #e2e8f0', boxShadow: '0 4px 12px rgba(0,0,0,.06)', fontSize: 12 },
   labelStyle: { fontWeight: 700, color: '#0f172a' },
 };
+
+const toNumber = (value: number | string | readonly (number | string)[] | undefined) =>
+  Number(Array.isArray(value) ? value[0] : (value ?? 0));
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 const fmt  = (v: number) => `₱${v.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -125,9 +129,13 @@ function buildCompare(orders: Order[], yA: number, yB: number) {
     if (o.status === 'Cancelled') continue;
     const d = new Date(o.date);
     const yr = d.getFullYear();
-    if (yr === yA || yr === yB) (rows[d.getMonth()] as any)[yr] += o.total;
+    if (yr === yA || yr === yB) (rows[d.getMonth()] as Record<number, number | string>)[yr] = Number((rows[d.getMonth()] as Record<number, number | string>)[yr] ?? 0) + o.total;
   }
-  return rows.map(r => ({ ...r, [yA]: Math.round((r as any)[yA]), [yB]: Math.round((r as any)[yB]) }));
+  return rows.map(r => ({
+    ...r,
+    [yA]: Math.round(Number((r as Record<number, number | string>)[yA] ?? 0)),
+    [yB]: Math.round(Number((r as Record<number, number | string>)[yB] ?? 0)),
+  }));
 }
 
 function buildPayment(orders: Order[]) {
@@ -153,52 +161,107 @@ function buildCategory(orders: Order[], n = 6) {
 // Returns all frequent itemsets with their support counts.
 type FreqItemset = { items: string[]; support: number; count: number };
 
-function aprioriMine(transactions: string[][], minSupport: number, maxLen = 4): FreqItemset[] {
-  const N = transactions.length;
-  if (N === 0) return [];
-  const minCount = Math.ceil(minSupport * N);
-  const txSets = transactions.map(t => new Set(t));
-  const result: FreqItemset[] = [];
-
-  // Count how many transactions contain all items in the itemset
-  const countItemset = (items: string[]) => txSets.filter(tx => items.every(i => tx.has(i))).length;
-
-  // ── Level 1: frequent single items ───────────────────────────────────────────
+function countSingleItems(transactions: string[][]) {
   const itemCounts = new Map<string, number>();
-  for (const tx of transactions) for (const item of new Set(tx))
-    itemCounts.set(item, (itemCounts.get(item) ?? 0) + 1);
-
-  let currentLevel: string[][] = [];
-  for (const [item, cnt] of itemCounts) {
-    if (cnt >= minCount) {
-      currentLevel.push([item]);
-      result.push({ items: [item], support: cnt / N, count: cnt });
+  for (const transaction of transactions) {
+    for (const item of new Set(transaction)) {
+      itemCounts.set(item, (itemCounts.get(item) ?? 0) + 1);
     }
   }
-  // Sort for consistent candidate generation (required by Apriori join step)
-  currentLevel.sort((a, b) => a[0].localeCompare(b[0]));
+  return itemCounts;
+}
+
+function countItemsetMatches(txSets: Set<string>[], items: string[]) {
+  return txSets.filter(tx => items.every(item => tx.has(item))).length;
+}
+
+function buildFrequentSingles(
+  itemCounts: Map<string, number>,
+  minCount: number,
+  totalTransactions: number,
+) {
+  const level: string[][] = [];
+  const result: FreqItemset[] = [];
+
+  for (const [item, count] of itemCounts) {
+    if (count < minCount) continue;
+    level.push([item]);
+    result.push({ items: [item], support: count / totalTransactions, count });
+  }
+
+  level.sort((a, b) => a[0].localeCompare(b[0]));
+  return { level, result };
+}
+
+function hasMatchingPrefix(left: string[], right: string[], prefixLength: number) {
+  for (let index = 0; index < prefixLength; index++) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function buildAprioriCandidates(currentLevel: string[][], itemsetSize: number) {
+  const candidates: string[][] = [];
+
+  for (let leftIndex = 0; leftIndex < currentLevel.length; leftIndex++) {
+    for (let rightIndex = leftIndex + 1; rightIndex < currentLevel.length; rightIndex++) {
+      const left = currentLevel[leftIndex];
+      const right = currentLevel[rightIndex];
+      if (!hasMatchingPrefix(left, right, itemsetSize - 2)) continue;
+      if (left[itemsetSize - 2] < right[itemsetSize - 2]) {
+        candidates.push([...left, right[itemsetSize - 2]]);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function buildFrequentLevel(
+  candidates: string[][],
+  txSets: Set<string>[],
+  minCount: number,
+  totalTransactions: number,
+) {
+  const level: string[][] = [];
+  const result: FreqItemset[] = [];
+
+  for (const items of candidates) {
+    const count = countItemsetMatches(txSets, items);
+    if (count < minCount) continue;
+    level.push(items);
+    result.push({ items, support: count / totalTransactions, count });
+  }
+
+  return { level, result };
+}
+
+function aprioriMine(transactions: string[][], minSupport: number, maxLen = 4): FreqItemset[] {
+  const totalTransactions = transactions.length;
+  if (totalTransactions === 0) return [];
+  const minCount = Math.ceil(minSupport * totalTransactions);
+  const txSets = transactions.map(transaction => new Set(transaction));
+  const initial = buildFrequentSingles(
+    countSingleItems(transactions),
+    minCount,
+    totalTransactions,
+  );
+  const result = [...initial.result];
+  let currentLevel = initial.level;
+
+  // ── Level 1: frequent single items ───────────────────────────────────────────
+  
 
   // ── Levels k = 2..maxLen ─────────────────────────────────────────────────────
-  for (let k = 2; k <= maxLen && currentLevel.length >= 2; k++) {
-    const candidates: string[][] = [];
-    // Join step: merge two (k-1)-itemsets that share the same (k-2) prefix
-    for (let i = 0; i < currentLevel.length; i++) {
-      for (let j = i + 1; j < currentLevel.length; j++) {
-        const a = currentLevel[i], b = currentLevel[j];
-        let match = true;
-        for (let x = 0; x < k - 2; x++) { if (a[x] !== b[x]) { match = false; break; } }
-        if (match && a[k - 2] < b[k - 2]) candidates.push([...a, b[k - 2]]);
-      }
-    }
-    const nextLevel: string[][] = [];
-    for (const c of candidates) {
-      const cnt = countItemset(c);
-      if (cnt >= minCount) {
-        nextLevel.push(c);
-        result.push({ items: c, support: cnt / N, count: cnt });
-      }
-    }
-    currentLevel = nextLevel;
+  for (let itemsetSize = 2; itemsetSize <= maxLen && currentLevel.length >= 2; itemsetSize++) {
+    const next = buildFrequentLevel(
+      buildAprioriCandidates(currentLevel, itemsetSize),
+      txSets,
+      minCount,
+      totalTransactions,
+    );
+    result.push(...next.result);
+    currentLevel = next.level;
   }
   return result;
 }
@@ -365,6 +428,122 @@ function getPeriodLabel(viewType: ViewType, year: number, month: number, compare
   return `${year} vs ${compareYear}`;
 }
 
+function fetchAdminJson<T>(url: string, token: string, fallback: T): Promise<T> {
+  return fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    .then(response => response.ok ? response.json() as Promise<T> : fallback)
+    .catch(() => fallback);
+}
+
+function buildAnalyticsQuery(dateRange: { from: string; to: string } | null) {
+  const parts = ['limit=50'];
+  if (dateRange?.from) parts.push(`from=${encodeURIComponent(dateRange.from)}`);
+  if (dateRange?.to) parts.push(`to=${encodeURIComponent(dateRange.to)}`);
+  return parts.join('&');
+}
+
+async function loadDashboardInitialData(token: string) {
+  const [stats, authStats, allOrders, recentOrders, returns] = await Promise.all([
+    fetchAdminJson<OrderStats | Record<string, never>>('/api/admin/stats', token, {}),
+    fetchAdminJson<AuthStats | Record<string, never>>('/api/admin/auth-stats', token, {}),
+    fetchAdminJson<ApiDataResponse<Order[]>>('/api/admin/orders?limit=500', token, {}),
+    fetchAdminJson<ApiDataResponse<Order[]>>('/api/admin/orders?limit=8', token, {}),
+    fetchAdminJson<ApiDataResponse<ReturnReq[]>>('/api/admin/returns?limit=200', token, {}),
+  ]);
+
+  return {
+    stats,
+    authStats,
+    allOrders: allOrders?.data ?? [],
+    recentOrders: recentOrders?.data ?? [],
+    returns: returns?.data ?? [],
+  };
+}
+
+async function loadDashboardAnalytics(token: string, dateRange: { from: string; to: string } | null) {
+  const query = buildAnalyticsQuery(dateRange);
+  const [searches, views] = await Promise.all([
+    fetchAdminJson<ApiDataResponse<SearchRow[]>>(`/api/admin/analytics?type=searches&${query}`, token, {}),
+    fetchAdminJson<ApiDataResponse<ViewRow[]>>(`/api/admin/analytics?type=product-views&${query}`, token, {}),
+  ]);
+
+  return {
+    searches: searches?.data ?? [],
+    views: views?.data ?? [],
+  };
+}
+
+function buildStatusData(orders: Order[]) {
+  const counts = { Processing: 0, 'In Transit': 0, Delivered: 0, Cancelled: 0 } as Record<string, number>;
+  for (const order of orders) counts[order.status] = (counts[order.status] ?? 0) + 1;
+  return Object.entries(counts).map(([name, value]) => ({
+    name,
+    value,
+    fill: name === 'Processing' ? C_BLUE : name === 'In Transit' ? C_AMBER : name === 'Delivered' ? C_GREEN : C_RED,
+  }));
+}
+
+function buildProductNameMap(orders: Order[]) {
+  const map: Record<string, string> = {};
+  for (const order of orders) {
+    for (const item of order.items ?? []) {
+      if (item.id && item.name && !map[String(item.id)]) {
+        map[String(item.id)] = item.name;
+      }
+    }
+  }
+  return map;
+}
+
+function buildReturnStatusData(allReturns: ReturnReq[], dateRange: { from: string; to: string } | null) {
+  const filteredReturns = dateRange
+    ? allReturns.filter((entry) => {
+        const createdAt = new Date(entry.created_at).getTime();
+        return createdAt >= new Date(dateRange.from).getTime() && createdAt <= new Date(dateRange.to).getTime();
+      })
+    : allReturns;
+
+  const counts: Record<string, number> = {};
+  for (const entry of filteredReturns) counts[entry.status] = (counts[entry.status] ?? 0) + 1;
+  return Object.entries(counts).map(([name, value]) => ({ name, value }));
+}
+
+function buildDashboardSummary(
+  filteredOrders: Order[],
+  orderStats: OrderStats | null,
+  viewType: ViewType,
+  year: number,
+  month: number,
+  compareYear: number,
+) {
+  const periodOrders = filteredOrders.length;
+  const periodRevenue = filteredOrders
+    .filter(order => order.status !== 'Cancelled')
+    .reduce((sum, order) => sum + order.total, 0);
+  const delivered = filteredOrders.filter(order => order.status === 'Delivered').length;
+  const fulfillment = Math.round((delivered / (periodOrders || 1)) * 100);
+
+  return {
+    periodOrders,
+    periodRevenue,
+    delivered,
+    fulfillment,
+    radialData: [
+      { name: 'Fulfilled', value: fulfillment, fill: C_GREEN },
+      { name: 'Other', value: 100 - fulfillment, fill: '#f1f5f9' },
+    ],
+    needsAttention: (orderStats?.pendingOrders ?? 0) + (orderStats?.pendingReturns ?? 0),
+    periodLabel: getPeriodLabel(viewType, year, month, compareYear),
+  };
+}
+
+function isOrderStats(value: OrderStats | Record<string, never>): value is OrderStats {
+  return typeof (value as Partial<OrderStats>).totalOrders === 'number';
+}
+
+function isAuthStats(value: AuthStats | Record<string, never>): value is AuthStats {
+  return typeof (value as Partial<AuthStats>).totalCustomers === 'number';
+}
+
 function generateRules(frequentItemsets: FreqItemset[], minConfidence: number): RawRule[] {
   const supportMap = new Map<string, { support: number; count: number }>();
   for (const fi of frequentItemsets) {
@@ -503,27 +682,16 @@ export default function AdminDashboard() {
     [viewType, year, month, compareYear],
   );
 
-  const safe = (url: string, token: string): Promise<any> =>
-    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.ok ? r.json() : {})
-      .catch(() => ({}));
-
   // Initial load — orders, stats, returns
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
-    Promise.all([
-      safe('/api/admin/stats', token),
-      safe('/api/admin/auth-stats', token),
-      safe('/api/admin/orders?limit=500', token),
-      safe('/api/admin/orders?limit=8', token),
-      safe('/api/admin/returns?limit=200', token),
-    ]).then(([stats, aStats, allOrd, recOrd, ret]) => {
-      if (stats?.totalOrders !== undefined) setOrderStats(stats);
-      if (aStats?.totalCustomers !== undefined) setAuthStats(aStats);
-      setAllOrders(allOrd?.data ?? []);
-      setRecent(recOrd?.data ?? []);
-      setAllReturns(ret?.data ?? []);
+    loadDashboardInitialData(token).then((data) => {
+      if (isOrderStats(data.stats)) setOrderStats(data.stats);
+      if (isAuthStats(data.authStats)) setAuthStats(data.authStats);
+      setAllOrders(data.allOrders);
+      setRecent(data.recentOrders);
+      setAllReturns(data.returns);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -531,16 +699,9 @@ export default function AdminDashboard() {
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
-    const parts = ['limit=50'];
-    if (dateRange?.from) parts.push(`from=${encodeURIComponent(dateRange.from)}`);
-    if (dateRange?.to)   parts.push(`to=${encodeURIComponent(dateRange.to)}`);
-    const qs = parts.join('&');
-    Promise.all([
-      safe(`/api/admin/analytics?type=searches&${qs}`, token),
-      safe(`/api/admin/analytics?type=product-views&${qs}`, token),
-    ]).then(([srch, vw]) => {
-      setSearches(srch?.data ?? []);
-      setViews(vw?.data ?? []);
+    loadDashboardAnalytics(token, dateRange).then((data) => {
+      setSearches(data.searches);
+      setViews(data.views);
     }).catch(() => {});
   }, [dateRange]);
 
@@ -558,27 +719,10 @@ export default function AdminDashboard() {
   const categoryData = useMemo(() => buildCategory(filtered,6),    [filtered]);
   const basketAnalysis = useMemo(() => buildMarketBasket(filtered, 8), [filtered]);
 
-  const statusData = useMemo(() => {
-    const c = { Processing: 0, 'In Transit': 0, Delivered: 0, Cancelled: 0 } as Record<string, number>;
-    for (const o of filtered) c[o.status] = (c[o.status] ?? 0) + 1;
-    return Object.entries(c).map(([name, value]) => ({
-      name, value,
-      fill: name==='Processing' ? C_BLUE : name==='In Transit' ? C_AMBER : name==='Delivered' ? C_GREEN : C_RED,
-    }));
-  }, [filtered]);
+  const statusData = useMemo(() => buildStatusData(filtered), [filtered]);
 
   // Build product name map from order items (product_id → name)
-  const productNames = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const order of allOrders) {
-      for (const item of order.items ?? []) {
-        if (item.id && item.name && !map[String(item.id)]) {
-          map[String(item.id)] = item.name;
-        }
-      }
-    }
-    return map;
-  }, [allOrders]);
+  const productNames = useMemo(() => buildProductNameMap(allOrders), [allOrders]);
 
   // Pending returns for the top widget (always all pending, not date-filtered)
   const returns = useMemo(
@@ -586,25 +730,23 @@ export default function AdminDashboard() {
     [allReturns]
   );
 
-  const returnStatusData = useMemo(() => {
-    const filtered = dateRange
-      ? allReturns.filter(r => {
-          const d = new Date(r.created_at).getTime();
-          return d >= new Date(dateRange.from).getTime() && d <= new Date(dateRange.to).getTime();
-        })
-      : allReturns;
-    const m: Record<string, number> = {};
-    for (const r of filtered) m[r.status] = (m[r.status] ?? 0) + 1;
-    return Object.entries(m).map(([name, value]) => ({ name, value }));
-  }, [allReturns, dateRange]);
+  const returnStatusData = useMemo(
+    () => buildReturnStatusData(allReturns, dateRange),
+    [allReturns, dateRange],
+  );
 
-  const periodOrders  = filtered.length;
-  const periodRevenue = filtered.filter(o => o.status !== 'Cancelled').reduce((s, o) => s + o.total, 0);
-  const delivered     = filtered.filter(o => o.status === 'Delivered').length;
-  const fulfillment   = Math.round((delivered / (periodOrders || 1)) * 100);
-  const radialData    = [{ name: 'Fulfilled', value: fulfillment, fill: C_GREEN }, { name: 'Other', value: 100 - fulfillment, fill: '#f1f5f9' }];
-  const needsAttention = (orderStats?.pendingOrders ?? 0) + (orderStats?.pendingReturns ?? 0);
-  const periodLabel   = getPeriodLabel(viewType, year, month, compareYear);
+  const {
+    periodOrders,
+    periodRevenue,
+    delivered,
+    fulfillment,
+    radialData,
+    needsAttention,
+    periodLabel,
+  } = useMemo(
+    () => buildDashboardSummary(filtered, orderStats, viewType, year, month, compareYear),
+    [filtered, orderStats, viewType, year, month, compareYear],
+  );
   const topBasketPair = basketAnalysis.rows[0];
 
   if (loading) {
@@ -806,7 +948,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(v: any, n: any) => [fmt(v), n]} />
+                  <Tooltip {...TT} formatter={(value, name) => [fmt(toNumber(value)), String(name)]} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Line type="monotone" dataKey={String(year)}        stroke={C_BLUE}  strokeWidth={2.5} dot={{ r: 3, fill: C_BLUE }}  activeDot={{ r: 5 }} />
                   <Line type="monotone" dataKey={String(compareYear)} stroke={C_SLATE} strokeWidth={2}   dot={{ r: 3, fill: C_SLATE }} activeDot={{ r: 5 }} strokeDasharray="5 4" />
@@ -822,7 +964,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
                   <YAxis tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(v: any) => [fmt(v), 'Revenue']} />
+                  <Tooltip {...TT} formatter={(value) => [fmt(toNumber(value)), 'Revenue']} />
                   <Area type="monotone" dataKey="revenue" stroke={C_BLUE} strokeWidth={2} fill="url(#rg)" dot={false} activeDot={{ r: 4, fill: C_BLUE }} />
                 </AreaChart>
               )}
@@ -846,7 +988,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(v: any) => [v, 'Orders']} />
+                  <Tooltip {...TT} formatter={(value) => [toNumber(value), 'Orders']} />
                   <Bar dataKey="orders" fill={C_INDIGO} radius={[4, 4, 0, 0]}>
                     {(timeSeries as { label: string; orders?: number }[]).map((_, i) => (
                       <Cell key={i} fill={i % 2 === 0 ? C_INDIGO : '#818cf8'} />
@@ -893,7 +1035,7 @@ export default function AdminDashboard() {
               <ResponsiveContainer width="100%" height={200}>
                 <RadialBarChart cx="50%" cy="50%" innerRadius={50} outerRadius={76} startAngle={90} endAngle={-270} data={radialData}>
                   <RadialBar dataKey="value" cornerRadius={6} />
-                  <Tooltip {...TT} formatter={(v: any) => [`${v}%`, '']} />
+                  <Tooltip {...TT} formatter={(value) => [`${toNumber(value)}%`, '']} />
                 </RadialBarChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -915,7 +1057,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={115} />
-                  <Tooltip {...TT} formatter={(v: any) => [v, 'Units']} />
+                  <Tooltip {...TT} formatter={(value) => [toNumber(value), 'Units']} />
                   <Bar dataKey="qty" radius={[0, 5, 5, 0]}>
                     {topProducts.map((_, i) => (
                       <Cell key={i} fill={i === 0 ? C_GREEN : i < 3 ? '#22c55e99' : '#86efac'} />
@@ -933,7 +1075,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis type="number" tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={90} />
-                  <Tooltip {...TT} formatter={(v: any) => [fmt(v), 'Revenue']} />
+                  <Tooltip {...TT} formatter={(value) => [fmt(toNumber(value)), 'Revenue']} />
                   <Bar dataKey="value" radius={[0, 5, 5, 0]}>
                     {categoryData.map((_, i) => <Cell key={i} fill={CHART_PAL[i % CHART_PAL.length]} />)}
                   </Bar>
@@ -964,7 +1106,7 @@ export default function AdminDashboard() {
                     <YAxis type="category" dataKey="pair" tick={{ fontSize: 10, fill: '#64748b' }} width={190} />
                     <Tooltip
                       {...TT}
-                      formatter={(value: any) => [value, 'Times bought together']}
+                      formatter={(value) => [toNumber(value), 'Times bought together']}
                       labelFormatter={(_, payload) => {
                         const row = payload?.[0]?.payload as BasketPairRow | undefined;
                         if (!row) return '';

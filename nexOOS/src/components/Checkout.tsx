@@ -202,6 +202,67 @@ const getDeliveryMethodCopy = (method: DeliveryMethod) => {
   };
 };
 
+const isOnlinePaymentMethod = (paymentMethod: string) =>
+  paymentMethod === 'gcash' || paymentMethod === 'maya' || paymentMethod === 'card';
+
+const buildCheckoutShippingAddress = (
+  deliveryMethod: DeliveryMethod,
+  selectedBranch: ReturnType<typeof useAppContext>['selectedBranch'],
+  shippingInfo: {
+    address: string;
+    city: string;
+    province?: string;
+    barangay?: string;
+    postalCode?: string;
+    formattedAddress?: string;
+  },
+) =>
+  deliveryMethod === 'claim_at_branch' && selectedBranch
+    ? `Pickup at ${selectedBranch.name}, ${selectedBranch.address}`
+    : formatDeliveryAddress(shippingInfo);
+
+function buildPlacedOrder(
+  data: {
+    order: {
+      id: string;
+      receiptNumber?: string;
+      orderNumber?: string;
+      txNo?: string;
+      date: string;
+      subtotal?: number;
+      deliveryFee?: number;
+      discountAmount?: number;
+      promoCode?: string;
+      total?: number;
+    };
+  },
+  effectiveCart: Order['items'],
+  effectiveCartTotal: number,
+  deliveryFee: number,
+  discountAmount: number,
+  appliedPromo: AppliedPromo | null,
+  orderTotal: number,
+  shippingAddress: string,
+  paymentMethodLabel: string,
+): Order {
+  return {
+    id: data.order.id,
+    receiptNumber: data.order.receiptNumber,
+    orderNumber: data.order.orderNumber,
+    txNo: data.order.txNo,
+    date: data.order.date,
+    items: effectiveCart.map((item) => ({ ...item })),
+    subtotal: Number(data.order.subtotal ?? effectiveCartTotal),
+    deliveryFee: Number(data.order.deliveryFee ?? deliveryFee),
+    discountAmount: Number(data.order.discountAmount ?? discountAmount),
+    promoCode: data.order.promoCode || appliedPromo?.code,
+    total: Number(data.order.total ?? orderTotal),
+    status: 'Processing',
+    shippingAddress,
+    paymentMethod: paymentMethodLabel,
+  };
+}
+
 export default function Checkout() {
   const {
     cart, setCart,
@@ -600,7 +661,7 @@ export default function Checkout() {
     };
   }, [promoCodeInput, effectiveCartTotal]);
 
-  const isOnlinePayment = paymentMethod === 'gcash' || paymentMethod === 'maya' || paymentMethod === 'card';
+  const isOnlinePayment = isOnlinePaymentMethod(paymentMethod);
 
   const buildOrderPayload = (shippingAddress: string, paymentMethodLabel: string) => ({
     shippingAddress,
@@ -623,10 +684,7 @@ export default function Checkout() {
     setIsPlacingOrder(true);
     try {
       const paymentMethodLabel = getPaymentMethodLabel(paymentMethod, deliveryMethod);
-      const shippingAddress = deliveryMethod === 'claim_at_branch' && selectedBranch
-        ? `Pickup at ${selectedBranch.name}, ${selectedBranch.address}`
-        : formatDeliveryAddress(shippingInfo);
-
+      const shippingAddress = buildCheckoutShippingAddress(deliveryMethod, selectedBranch, shippingInfo);
       const orderPayload = buildOrderPayload(shippingAddress, paymentMethodLabel);
 
       // ── Online payment (GCash / Maya / Card) ────────────────────────────────
@@ -677,22 +735,17 @@ export default function Checkout() {
         throw new Error(data.error || 'Failed to place order');
       }
 
-      const newOrder: Order = {
-        id: data.order.id,
-        receiptNumber: data.order.receiptNumber,
-        orderNumber: data.order.orderNumber,
-        txNo: data.order.txNo,
-        date: data.order.date,
-        items: effectiveCart.map((item) => ({ ...item })),
-        subtotal: Number(data.order.subtotal ?? effectiveCartTotal),
-        deliveryFee: Number(data.order.deliveryFee ?? deliveryFee),
-        discountAmount: Number(data.order.discountAmount ?? discountAmount),
-        promoCode: data.order.promoCode || appliedPromo?.code,
-        total: Number(data.order.total ?? orderTotal),
-        status: 'Processing',
+      const newOrder = buildPlacedOrder(
+        data,
+        effectiveCart,
+        effectiveCartTotal,
+        deliveryFee,
+        discountAmount,
+        appliedPromo,
+        orderTotal,
         shippingAddress,
-        paymentMethod: paymentMethodLabel,
-      };
+        paymentMethodLabel,
+      );
 
       setOrders((prev) => [newOrder, ...prev]);
       setCart(cart.filter(i => !effectiveCart.some(e => e.id === i.id)));
