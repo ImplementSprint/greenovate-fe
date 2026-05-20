@@ -61,6 +61,239 @@ type AppliedPromo = {
   maxDiscount?: number | null;
 };
 
+type ShippingInfo = {
+  fullName: string;
+  phone: string;
+  address: string;
+  city: string;
+  province: string;
+  barangay: string;
+  postalCode: string;
+  formattedAddress: string;
+  placeId: string;
+  latitude: number | undefined;
+  longitude: number | undefined;
+};
+
+type DeliveryEstimateStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+const createShippingInfoFromUser = (user: ReturnType<typeof useAppContext>['user']): ShippingInfo => ({
+  fullName: user?.full_name || '',
+  phone: user?.phone || '',
+  address: '',
+  city: 'Manila',
+  province: '',
+  barangay: '',
+  postalCode: '',
+  formattedAddress: '',
+  placeId: '',
+  latitude: undefined,
+  longitude: undefined,
+});
+
+const createShippingInfoFromAddress = (
+  address: SavedAddress,
+  user: ReturnType<typeof useAppContext>['user'],
+): ShippingInfo => ({
+  fullName: address.fullName || user?.full_name || '',
+  phone: address.phoneNumber || user?.phone || '',
+  address: address.streetAddress || '',
+  city: address.city || 'Manila',
+  province: address.province || '',
+  barangay: address.barangay || '',
+  postalCode: address.postalCode || '',
+  formattedAddress: address.formattedAddress || formatSavedAddress(address),
+  placeId: address.placeId || '',
+  latitude: address.latitude,
+  longitude: address.longitude,
+});
+
+async function loadCheckoutSuggestions(cart: Order['items']) {
+  const cartIds = new Set(cart.map((item) => item.id));
+  const recommendationPayloads = await Promise.all(
+    cart.map((item) =>
+      fetchProductPayload(`/api/products/${encodeURIComponent(item.id)}/recommendations?limit=15`),
+    ),
+  );
+
+  const merged = mergeSuggestions(recommendationPayloads, cartIds);
+  if (merged.length > 0) {
+    return merged;
+  }
+
+  const categories = getCartCategories(cart);
+  const fallbackPayloads = await fetchCategoryFallbackPayloads(categories);
+  return mergeSuggestions(fallbackPayloads, cartIds);
+}
+
+function syncCheckoutAddressState(params: {
+  user: ReturnType<typeof useAppContext>['user'];
+  applySavedAddress: (address: SavedAddress) => void;
+  setCheckoutAddresses: React.Dispatch<React.SetStateAction<SavedAddress[]>>;
+  setCheckoutAddressForm: React.Dispatch<React.SetStateAction<SavedAddress>>;
+  setCheckoutMakeDefault: React.Dispatch<React.SetStateAction<boolean>>;
+  setCheckoutAddressError: React.Dispatch<React.SetStateAction<string>>;
+  setAddressPickerView: React.Dispatch<React.SetStateAction<'list' | 'form'>>;
+  setIsProvincePickerOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  setIsCityPickerOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  setSelectedSavedAddressIndex: React.Dispatch<React.SetStateAction<number | null>>;
+  setShippingInfo: React.Dispatch<React.SetStateAction<ShippingInfo>>;
+}) {
+  const parsedAddresses = parseSerializedAddresses(params.user?.address, params.user);
+
+  params.setCheckoutAddresses(parsedAddresses);
+  params.setCheckoutAddressForm(createEmptySavedAddress(params.user));
+  params.setCheckoutMakeDefault(parsedAddresses.length === 0);
+  params.setCheckoutAddressError('');
+  params.setAddressPickerView('list');
+  params.setIsProvincePickerOpen(false);
+  params.setIsCityPickerOpen(false);
+
+  if (parsedAddresses.length > 0) {
+    params.setSelectedSavedAddressIndex(0);
+    params.applySavedAddress(parsedAddresses[0]);
+    return;
+  }
+
+  params.setSelectedSavedAddressIndex(null);
+  params.setShippingInfo((prev) => ({
+    ...prev,
+    fullName: params.user?.full_name || prev.fullName,
+    phone: params.user?.phone || prev.phone,
+  }));
+}
+
+function createDeliveryEstimateEffect(params: {
+  deliveryMethod: DeliveryMethod;
+  shippingInfo: ShippingInfo;
+  selectedBranchId?: string | number;
+  setDeliveryEstimate: React.Dispatch<React.SetStateAction<DeliveryEstimate | null>>;
+  setDeliveryEstimateStatus: React.Dispatch<React.SetStateAction<DeliveryEstimateStatus>>;
+  setDeliveryEstimateError: React.Dispatch<React.SetStateAction<string>>;
+}) {
+  const address = params.shippingInfo.address.trim();
+  const city = params.shippingInfo.city.trim();
+  const province = params.shippingInfo.province.trim();
+
+  if (params.deliveryMethod !== 'claim_at_branch' && (!address || !city || !province)) {
+    params.setDeliveryEstimate(null);
+    params.setDeliveryEstimateStatus('idle');
+    params.setDeliveryEstimateError('');
+    return undefined;
+  }
+
+  let cancelled = false;
+  params.setDeliveryEstimateStatus('loading');
+  params.setDeliveryEstimateError('');
+
+  const timeoutId = globalThis.setTimeout(async () => {
+    try {
+      const res = await fetch(buildApiUrl('/api/delivery/estimate'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          address,
+          city,
+          province,
+          barangay: params.shippingInfo.barangay,
+          latitude: params.shippingInfo.latitude,
+          longitude: params.shippingInfo.longitude,
+          placeId: params.shippingInfo.placeId,
+          branchId: params.selectedBranchId,
+          deliveryMethod: params.deliveryMethod,
+        }),
+      });
+
+      const data = await res.json();
+      if (cancelled) return;
+
+      if (!res.ok) {
+        params.setDeliveryEstimate(null);
+        params.setDeliveryEstimateStatus('error');
+        params.setDeliveryEstimateError(data.error || 'Unable to estimate delivery for this address.');
+        return;
+      }
+
+      params.setDeliveryEstimate(data.estimate);
+      params.setDeliveryEstimateStatus('ready');
+    } catch (error) {
+      if (cancelled) return;
+      console.error('Delivery estimate request failed:', error);
+      params.setDeliveryEstimate(null);
+      params.setDeliveryEstimateStatus('error');
+      params.setDeliveryEstimateError('Unable to estimate delivery for this address.');
+    }
+  }, 300);
+
+  return () => {
+    cancelled = true;
+    globalThis.clearTimeout(timeoutId);
+  };
+}
+
+function createPromoValidationEffect(params: {
+  promoCodeInput: string;
+  effectiveCartTotal: number;
+  setPromoStatus: React.Dispatch<React.SetStateAction<'idle' | 'checking' | 'valid' | 'invalid'>>;
+  setPromoMessage: React.Dispatch<React.SetStateAction<string>>;
+  setAppliedPromo: React.Dispatch<React.SetStateAction<AppliedPromo | null>>;
+}) {
+  const trimmedCode = params.promoCodeInput.trim();
+
+  if (!trimmedCode) {
+    params.setPromoStatus('idle');
+    params.setPromoMessage('');
+    params.setAppliedPromo(null);
+    return undefined;
+  }
+
+  let cancelled = false;
+  params.setPromoStatus('checking');
+  params.setPromoMessage('');
+
+  const timeoutId = globalThis.setTimeout(async () => {
+    try {
+      const res = await fetch(buildApiUrl('/api/promos/validate'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          code: trimmedCode,
+          subtotal: params.effectiveCartTotal,
+        }),
+      });
+
+      const data = await res.json();
+      if (cancelled) return;
+
+      if (!res.ok || !data.valid) {
+        params.setPromoStatus('invalid');
+        params.setPromoMessage(data.reason || data.error || 'Promo code is invalid.');
+        params.setAppliedPromo(null);
+        return;
+      }
+
+      params.setPromoStatus('valid');
+      params.setPromoMessage(data.message || 'Promo code applied.');
+      params.setAppliedPromo(data.promo);
+    } catch (error) {
+      if (cancelled) return;
+      console.error('Promo validation request failed:', error);
+      params.setPromoStatus('invalid');
+      params.setPromoMessage('Unable to validate promo code right now.');
+      params.setAppliedPromo(null);
+    }
+  }, 350);
+
+  return () => {
+    cancelled = true;
+    globalThis.clearTimeout(timeoutId);
+  };
+}
+
 const getSavedAddressPrompt = (count: number) =>
   count > 0
     ? 'Pick one of your saved delivery addresses from the popup, or add a new one there.'
@@ -290,23 +523,11 @@ export default function Checkout() {
   const carouselRef = React.useRef<HTMLDivElement>(null);
   const [canScrollSuggestionsLeft, setCanScrollSuggestionsLeft] = useState(false);
   const [canScrollSuggestionsRight, setCanScrollSuggestionsRight] = useState(false);
-  const [shippingInfo, setShippingInfo] = useState({
-    fullName: '',
-    phone: '',
-    address: '',
-    city: 'Manila',
-    province: '',
-    barangay: '',
-    postalCode: '',
-    formattedAddress: '',
-    placeId: '',
-    latitude: undefined as number | undefined,
-    longitude: undefined as number | undefined,
-  });
+  const [shippingInfo, setShippingInfo] = useState<ShippingInfo>(createShippingInfoFromUser(user));
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>('same_day');
   const [shippingError, setShippingError] = useState('');
   const [deliveryEstimate, setDeliveryEstimate] = useState<DeliveryEstimate | null>(null);
-  const [deliveryEstimateStatus, setDeliveryEstimateStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [deliveryEstimateStatus, setDeliveryEstimateStatus] = useState<DeliveryEstimateStatus>('idle');
   const [deliveryEstimateError, setDeliveryEstimateError] = useState('');
   const [promoCodeInput, setPromoCodeInput] = useState('');
   const [promoStatus, setPromoStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
@@ -353,21 +574,9 @@ export default function Checkout() {
   const paymentMethodLabel = getPaymentMethodLabel(paymentMethod, deliveryMethod);
 
   const applySavedAddress = React.useCallback((address: SavedAddress) => {
-    setShippingInfo({
-      fullName: address.fullName || user?.full_name || '',
-      phone: address.phoneNumber || user?.phone || '',
-      address: address.streetAddress || '',
-      city: address.city || 'Manila',
-      province: address.province || '',
-      barangay: address.barangay || '',
-      postalCode: address.postalCode || '',
-      formattedAddress: address.formattedAddress || formatSavedAddress(address),
-      placeId: address.placeId || '',
-      latitude: address.latitude,
-      longitude: address.longitude,
-    });
+    setShippingInfo(createShippingInfoFromAddress(address, user));
     setShippingError('');
-  }, [user?.full_name, user?.phone]);
+  }, [user]);
 
   const persistCheckoutAddresses = async (nextAddresses: SavedAddress[]) => {
     if (!user) {
@@ -416,19 +625,7 @@ export default function Checkout() {
     setCheckoutAddressError('');
     setIsProvincePickerOpen(false);
     setIsCityPickerOpen(false);
-    setShippingInfo({
-      fullName: user?.full_name || '',
-      phone: user?.phone || '',
-      address: '',
-      city: 'Manila',
-      province: '',
-      barangay: '',
-      postalCode: '',
-      formattedAddress: '',
-      placeId: '',
-      latitude: undefined,
-      longitude: undefined,
-    });
+    setShippingInfo(createShippingInfoFromUser(user));
     setShippingError('');
   };
 
@@ -436,27 +633,19 @@ export default function Checkout() {
   // then fall back to all unique categories across the cart
   React.useEffect(() => {
     if (cart.length === 0) return;
-    const cartIds = new Set(cart.map((i) => i.id));
+    let active = true;
 
-    const fetchAll = async () => {
-      const recommendationPayloads = await Promise.all(
-        cart.map((item) =>
-          fetchProductPayload(`/api/products/${encodeURIComponent(item.id)}/recommendations?limit=15`),
-        ),
-      );
+    loadCheckoutSuggestions(cart)
+      .then((nextSuggestions) => {
+        if (active) {
+          setSuggestions(nextSuggestions);
+        }
+      })
+      .catch(() => {});
 
-      const merged = mergeSuggestions(recommendationPayloads, cartIds);
-      if (merged.length > 0) {
-        setSuggestions(merged);
-        return;
-      }
-
-      const categories = getCartCategories(cart);
-      const fallbackPayloads = await fetchCategoryFallbackPayloads(categories);
-      setSuggestions(mergeSuggestions(fallbackPayloads, cartIds));
+    return () => {
+      active = false;
     };
-
-    fetchAll().catch(() => {});
   }, [cart]);
 
   const CARD_W = 176; // card width 160 + gap 16
@@ -495,170 +684,44 @@ export default function Checkout() {
   };
 
   React.useEffect(() => {
-    const parsedAddresses = parseSerializedAddresses(user?.address, user);
-
-    setCheckoutAddresses(parsedAddresses);
-    setCheckoutAddressForm(createEmptySavedAddress(user));
-    setCheckoutMakeDefault(parsedAddresses.length === 0);
-    setCheckoutAddressError('');
-    setAddressPickerView('list');
-    setIsProvincePickerOpen(false);
-    setIsCityPickerOpen(false);
-
-    if (parsedAddresses.length > 0) {
-      setSelectedSavedAddressIndex(0);
-      applySavedAddress(parsedAddresses[0]);
-      return;
-    }
-
-    setSelectedSavedAddressIndex(null);
-    setShippingInfo((prev) => ({
-      ...prev,
-      fullName: user?.full_name || prev.fullName,
-      phone: user?.phone || prev.phone,
-    }));
+    syncCheckoutAddressState({
+      user,
+      applySavedAddress,
+      setCheckoutAddresses,
+      setCheckoutAddressForm,
+      setCheckoutMakeDefault,
+      setCheckoutAddressError,
+      setAddressPickerView,
+      setIsProvincePickerOpen,
+      setIsCityPickerOpen,
+      setSelectedSavedAddressIndex,
+      setShippingInfo,
+    });
   }, [applySavedAddress, user, user?.address, user?.full_name, user?.phone]);
 
   React.useEffect(() => {
-    const address = shippingInfo.address.trim();
-    const city = shippingInfo.city.trim();
-    const province = shippingInfo.province.trim();
-
-    if (deliveryMethod !== 'claim_at_branch' && (!address || !city || !province)) {
-      setDeliveryEstimate(null);
-      setDeliveryEstimateStatus('idle');
-      setDeliveryEstimateError('');
-      return;
-    }
-
-    let cancelled = false;
-
-    setDeliveryEstimateStatus('loading');
-    setDeliveryEstimateError('');
-
-    const timeoutId = globalThis.setTimeout(async () => {
-      try {
-        const res = await fetch(buildApiUrl('/api/delivery/estimate'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            address,
-            city,
-            province,
-            barangay: shippingInfo.barangay,
-            latitude: shippingInfo.latitude,
-            longitude: shippingInfo.longitude,
-            placeId: shippingInfo.placeId,
-            branchId: selectedBranch?.id,
-            deliveryMethod,
-          }),
-        });
-
-        const data = await res.json();
-
-        if (cancelled) {
-          return;
-        }
-
-        if (!res.ok) {
-          setDeliveryEstimate(null);
-          setDeliveryEstimateStatus('error');
-          setDeliveryEstimateError(data.error || 'Unable to estimate delivery for this address.');
-          return;
-        }
-
-        setDeliveryEstimate(data.estimate);
-        setDeliveryEstimateStatus('ready');
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        console.error('Delivery estimate request failed:', error);
-        setDeliveryEstimate(null);
-        setDeliveryEstimateStatus('error');
-        setDeliveryEstimateError('Unable to estimate delivery for this address.');
-      }
-    }, 300);
-
-    return () => {
-      cancelled = true;
-      globalThis.clearTimeout(timeoutId);
-    };
+    return createDeliveryEstimateEffect({
+      deliveryMethod,
+      shippingInfo,
+      selectedBranchId: selectedBranch?.id,
+      setDeliveryEstimate,
+      setDeliveryEstimateStatus,
+      setDeliveryEstimateError,
+    });
   }, [
     deliveryMethod,
     selectedBranch?.id,
-    shippingInfo.address,
-    shippingInfo.barangay,
-    shippingInfo.city,
-    shippingInfo.latitude,
-    shippingInfo.longitude,
-    shippingInfo.placeId,
-    shippingInfo.province,
+    shippingInfo,
   ]);
 
   React.useEffect(() => {
-    const trimmedCode = promoCodeInput.trim();
-
-    if (!trimmedCode) {
-      setPromoStatus('idle');
-      setPromoMessage('');
-      setAppliedPromo(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    setPromoStatus('checking');
-    setPromoMessage('');
-
-    const timeoutId = globalThis.setTimeout(async () => {
-      try {
-        const res = await fetch(buildApiUrl('/api/promos/validate'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            code: trimmedCode,
-            subtotal: effectiveCartTotal,
-          }),
-        });
-
-        const data = await res.json();
-
-        if (cancelled) {
-          return;
-        }
-
-        if (!res.ok || !data.valid) {
-          setPromoStatus('invalid');
-          setPromoMessage(data.reason || data.error || 'Promo code is invalid.');
-          setAppliedPromo(null);
-          return;
-        }
-
-        setPromoStatus('valid');
-        setPromoMessage(data.message || 'Promo code applied.');
-        setAppliedPromo(data.promo);
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        console.error('Promo validation request failed:', error);
-        setPromoStatus('invalid');
-        setPromoMessage('Unable to validate promo code right now.');
-        setAppliedPromo(null);
-      }
-    }, 350);
-
-    return () => {
-      cancelled = true;
-      globalThis.clearTimeout(timeoutId);
-    };
+    return createPromoValidationEffect({
+      promoCodeInput,
+      effectiveCartTotal,
+      setPromoStatus,
+      setPromoMessage,
+      setAppliedPromo,
+    });
   }, [promoCodeInput, effectiveCartTotal]);
 
   const isOnlinePayment = isOnlinePaymentMethod(paymentMethod);
