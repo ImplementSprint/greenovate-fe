@@ -21,6 +21,9 @@ import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { usePhilippineLocations } from '@/hooks/usePhilippineLocations';
 import { useOosSettings, isPastCutoff } from '@/hooks/useOosSettings';
 
+type ProductSuggestion = import('../types').Product;
+type ProductPayload = ProductSuggestion[] | { data?: ProductSuggestion[] };
+
 const formatDeliveryAddress = (info: {
   address: string;
   city: string;
@@ -134,6 +137,47 @@ const getPaymentMethodIcon = (paymentMethod: string) => {
   return <CreditCard className="w-5 h-5 text-blue-600" />;
 };
 
+const getPayloadProducts = (payload: ProductPayload) =>
+  (Array.isArray(payload) ? payload : payload?.data ?? []) as ProductSuggestion[];
+
+const fetchProductPayload = async (url: string): Promise<ProductPayload> =>
+  fetch(url)
+    .then((response) => (response.ok ? response.json() : { data: [] }))
+    .catch(() => ({ data: [] }));
+
+const mergeSuggestions = (payloads: ProductPayload[], cartIds: Set<string>) => {
+  const seen = new Set<string>();
+  const merged: ProductSuggestion[] = [];
+
+  for (const payload of payloads) {
+    for (const product of getPayloadProducts(payload)) {
+      if (cartIds.has(product.id) || seen.has(product.id)) continue;
+      seen.add(product.id);
+      merged.push(product);
+    }
+  }
+
+  return merged;
+};
+
+const getCartCategories = (cart: Order['items']) =>
+  [...new Set(cart.map((item) => item.category).filter(Boolean))];
+
+const buildFallbackQuery = (category?: string) =>
+  category ? `category=${encodeURIComponent(category)}&limit=15` : 'limit=15';
+
+const fetchCategoryFallbackPayloads = async (categories: string[]) => {
+  const [firstCategory, ...otherCategories] = categories;
+  const basePayload = await fetchProductPayload(`/api/products?${buildFallbackQuery(firstCategory)}`);
+  const extraPayloads = await Promise.all(
+    otherCategories.map((category) =>
+      fetchProductPayload(`/api/products?category=${encodeURIComponent(category)}&limit=15`),
+    ),
+  );
+
+  return [basePayload, ...extraPayloads];
+};
+
 
 const getDiscountTextClass = (discountAmount: number) => (discountAmount > 0 ? 'text-blue-600' : '');
 
@@ -166,7 +210,6 @@ export default function Checkout() {
     setView,
     logout,
     setOrders,
-    setAccountSubView,
     selectedBranch,
     user,
     setUser,
@@ -335,72 +378,25 @@ export default function Checkout() {
     const cartIds = new Set(cart.map((i) => i.id));
 
     const fetchAll = async () => {
-      // Fetch recommendations for every cart item in parallel
-      const results = await Promise.all(
+      const recommendationPayloads = await Promise.all(
         cart.map((item) =>
-          fetch(`/api/products/${encodeURIComponent(item.id)}/recommendations?limit=15`)
-            .then((res) => res.ok ? res.json() : { data: [] })
-            .catch(() => ({ data: [] }))
-        )
+          fetchProductPayload(`/api/products/${encodeURIComponent(item.id)}/recommendations?limit=15`),
+        ),
       );
 
-      // Merge, deduplicate, and filter out items already in cart
-      const seen = new Set<string>();
-      const merged: import('../types').Product[] = [];
-      for (const payload of results) {
-        const recs = (payload?.data ?? []) as import('../types').Product[];
-        for (const p of recs) {
-          if (!cartIds.has(p.id) && !seen.has(p.id)) {
-            seen.add(p.id);
-            merged.push(p);
-          }
-        }
-      }
-
+      const merged = mergeSuggestions(recommendationPayloads, cartIds);
       if (merged.length > 0) {
         setSuggestions(merged);
         return;
       }
 
-      // Fallback: fetch by ALL unique categories in the cart
-      const categories = [...new Set(cart.map((i) => (i as any).category).filter(Boolean))];
-      const qs = categories.length > 0
-        ? `category=${encodeURIComponent(categories[0])}&limit=15`
-        : 'limit=15';
-      const fallback = await fetch(`/api/products?${qs}`)
-        .then((r) => r.ok ? r.json() : [])
-        .catch(() => []);
-      const fallbackRecs = (Array.isArray(fallback) ? fallback : fallback?.data ?? []) as import('../types').Product[];
-
-      // If multiple categories, also fetch for the rest and merge
-      if (categories.length > 1) {
-        const extras = await Promise.all(
-          categories.slice(1).map((cat) =>
-            fetch(`/api/products?category=${encodeURIComponent(cat)}&limit=15`)
-              .then((r) => r.ok ? r.json() : [])
-              .catch(() => [])
-          )
-        );
-        const allFallback = [...fallbackRecs];
-        for (const res of extras) {
-          const items = (Array.isArray(res) ? res : res?.data ?? []) as import('../types').Product[];
-          allFallback.push(...items);
-        }
-        const seenFallback = new Set<string>();
-        const dedupedFallback = allFallback.filter((p) => {
-          if (cartIds.has(p.id) || seenFallback.has(p.id)) return false;
-          seenFallback.add(p.id);
-          return true;
-        });
-        setSuggestions(dedupedFallback);
-        return;
-      }
-
-      setSuggestions(fallbackRecs.filter((p) => !cartIds.has(p.id)));
+      const categories = getCartCategories(cart);
+      const fallbackPayloads = await fetchCategoryFallbackPayloads(categories);
+      setSuggestions(mergeSuggestions(fallbackPayloads, cartIds));
     };
 
     fetchAll().catch(() => {});
-  }, [cart.length]);
+  }, [cart]);
 
   const CARD_W = 176; // card width 160 + gap 16
 
@@ -566,7 +562,7 @@ export default function Checkout() {
           },
           body: JSON.stringify({
             code: trimmedCode,
-            subtotal: cartTotal,
+            subtotal: effectiveCartTotal,
           }),
         });
 

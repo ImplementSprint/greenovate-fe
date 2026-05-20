@@ -12,9 +12,11 @@ export type UndoEntry = {
 };
 
 const UNDO_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
+const filterUndoEntriesById = (entries: UndoEntry[], id: string) =>
+  entries.filter((entry) => entry.id !== id);
 
 function Countdown({ expiresAt, onExpire }: { expiresAt: number; onExpire: () => void }) {
-  const [remaining, setRemaining] = useState(Math.max(0, expiresAt - Date.now()));
+  const [remaining, setRemaining] = useState(0);
 
   useEffect(() => {
     const tick = () => {
@@ -22,6 +24,7 @@ function Countdown({ expiresAt, onExpire }: { expiresAt: number; onExpire: () =>
       setRemaining(rem);
       if (rem === 0) onExpire();
     };
+    tick();
     const id = setInterval(tick, 500);
     return () => clearInterval(id);
   }, [expiresAt, onExpire]);
@@ -130,18 +133,16 @@ export function useUndoQueue() {
     const expiresAt = Date.now() + UNDO_WINDOW_MS;
     const full: UndoEntry = { ...entry, expiresAt };
     setEntries(prev => {
-      // Replace if same id already in queue
-      const filtered = prev.filter(e => e.id !== entry.id);
-      return [...filtered, full];
+      return [...filterUndoEntriesById(prev, entry.id), full];
     });
     // Auto-expire
     setTimeout(() => {
-      setEntries(prev => prev.filter(e => e.id !== entry.id));
+      setEntries(prev => filterUndoEntriesById(prev, entry.id));
     }, UNDO_WINDOW_MS + 100);
   };
 
   const remove = (id: string) => {
-    setEntries(prev => prev.filter(e => e.id !== id));
+    setEntries(prev => filterUndoEntriesById(prev, id));
   };
 
   return { entries, push, remove };
