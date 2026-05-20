@@ -23,6 +23,7 @@ type ViewRow    = { product_id: string; category: string; total_views: number };
 type OrderStats = { totalOrders: number; ordersToday: number; pendingOrders: number; todayRevenue: number; pendingReturns: number; processingOrders: number; inTransitOrders: number; deliveredOrders: number; cancelledOrders: number };
 type AuthStats  = { totalCustomers: number; newToday: number };
 type ViewType   = 'overall' | 'month' | 'year' | 'compare';
+type ApiDataResponse<T> = { data?: T };
 type BasketPairRow = {
   pair: string;            // "Antecedent → Consequent" label for chart
   count: number;           // support count (times both appear together)
@@ -61,6 +62,9 @@ const TT = {
   contentStyle: { borderRadius: 10, border: '1px solid #e2e8f0', boxShadow: '0 4px 12px rgba(0,0,0,.06)', fontSize: 12 },
   labelStyle: { fontWeight: 700, color: '#0f172a' },
 };
+
+const toNumber = (value: number | string | readonly (number | string)[] | undefined) =>
+  Number(Array.isArray(value) ? value[0] : (value ?? 0));
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 const fmt  = (v: number) => `₱${v.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -424,10 +428,10 @@ function getPeriodLabel(viewType: ViewType, year: number, month: number, compare
   return `${year} vs ${compareYear}`;
 }
 
-function fetchAdminJson(url: string, token: string): Promise<unknown> {
+function fetchAdminJson<T>(url: string, token: string, fallback: T): Promise<T> {
   return fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-    .then(response => response.ok ? response.json() : {})
-    .catch(() => ({}));
+    .then(response => response.ok ? response.json() as Promise<T> : fallback)
+    .catch(() => fallback);
 }
 
 function buildAnalyticsQuery(dateRange: { from: string; to: string } | null) {
@@ -439,11 +443,11 @@ function buildAnalyticsQuery(dateRange: { from: string; to: string } | null) {
 
 async function loadDashboardInitialData(token: string) {
   const [stats, authStats, allOrders, recentOrders, returns] = await Promise.all([
-    fetchAdminJson('/api/admin/stats', token),
-    fetchAdminJson('/api/admin/auth-stats', token),
-    fetchAdminJson('/api/admin/orders?limit=500', token),
-    fetchAdminJson('/api/admin/orders?limit=8', token),
-    fetchAdminJson('/api/admin/returns?limit=200', token),
+    fetchAdminJson<OrderStats | Record<string, never>>('/api/admin/stats', token, {}),
+    fetchAdminJson<AuthStats | Record<string, never>>('/api/admin/auth-stats', token, {}),
+    fetchAdminJson<ApiDataResponse<Order[]>>('/api/admin/orders?limit=500', token, {}),
+    fetchAdminJson<ApiDataResponse<Order[]>>('/api/admin/orders?limit=8', token, {}),
+    fetchAdminJson<ApiDataResponse<ReturnReq[]>>('/api/admin/returns?limit=200', token, {}),
   ]);
 
   return {
@@ -458,8 +462,8 @@ async function loadDashboardInitialData(token: string) {
 async function loadDashboardAnalytics(token: string, dateRange: { from: string; to: string } | null) {
   const query = buildAnalyticsQuery(dateRange);
   const [searches, views] = await Promise.all([
-    fetchAdminJson(`/api/admin/analytics?type=searches&${query}`, token),
-    fetchAdminJson(`/api/admin/analytics?type=product-views&${query}`, token),
+    fetchAdminJson<ApiDataResponse<SearchRow[]>>(`/api/admin/analytics?type=searches&${query}`, token, {}),
+    fetchAdminJson<ApiDataResponse<ViewRow[]>>(`/api/admin/analytics?type=product-views&${query}`, token, {}),
   ]);
 
   return {
@@ -530,6 +534,14 @@ function buildDashboardSummary(
     needsAttention: (orderStats?.pendingOrders ?? 0) + (orderStats?.pendingReturns ?? 0),
     periodLabel: getPeriodLabel(viewType, year, month, compareYear),
   };
+}
+
+function isOrderStats(value: OrderStats | Record<string, never>): value is OrderStats {
+  return typeof (value as Partial<OrderStats>).totalOrders === 'number';
+}
+
+function isAuthStats(value: AuthStats | Record<string, never>): value is AuthStats {
+  return typeof (value as Partial<AuthStats>).totalCustomers === 'number';
 }
 
 function generateRules(frequentItemsets: FreqItemset[], minConfidence: number): RawRule[] {
@@ -675,8 +687,8 @@ export default function AdminDashboard() {
     const token = getAccessToken();
     if (!token) return;
     loadDashboardInitialData(token).then((data) => {
-      if (data.stats?.totalOrders !== undefined) setOrderStats(data.stats);
-      if (data.authStats?.totalCustomers !== undefined) setAuthStats(data.authStats);
+      if (isOrderStats(data.stats)) setOrderStats(data.stats);
+      if (isAuthStats(data.authStats)) setAuthStats(data.authStats);
       setAllOrders(data.allOrders);
       setRecent(data.recentOrders);
       setAllReturns(data.returns);
@@ -936,7 +948,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(value: number, name: string) => [fmt(value), name]} />
+                  <Tooltip {...TT} formatter={(value, name) => [fmt(toNumber(value)), String(name)]} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Line type="monotone" dataKey={String(year)}        stroke={C_BLUE}  strokeWidth={2.5} dot={{ r: 3, fill: C_BLUE }}  activeDot={{ r: 5 }} />
                   <Line type="monotone" dataKey={String(compareYear)} stroke={C_SLATE} strokeWidth={2}   dot={{ r: 3, fill: C_SLATE }} activeDot={{ r: 5 }} strokeDasharray="5 4" />
@@ -952,7 +964,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
                   <YAxis tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(value: number) => [fmt(value), 'Revenue']} />
+                  <Tooltip {...TT} formatter={(value) => [fmt(toNumber(value)), 'Revenue']} />
                   <Area type="monotone" dataKey="revenue" stroke={C_BLUE} strokeWidth={2} fill="url(#rg)" dot={false} activeDot={{ r: 4, fill: C_BLUE }} />
                 </AreaChart>
               )}
@@ -976,7 +988,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(value: number) => [value, 'Orders']} />
+                  <Tooltip {...TT} formatter={(value) => [toNumber(value), 'Orders']} />
                   <Bar dataKey="orders" fill={C_INDIGO} radius={[4, 4, 0, 0]}>
                     {(timeSeries as { label: string; orders?: number }[]).map((_, i) => (
                       <Cell key={i} fill={i % 2 === 0 ? C_INDIGO : '#818cf8'} />
@@ -1023,7 +1035,7 @@ export default function AdminDashboard() {
               <ResponsiveContainer width="100%" height={200}>
                 <RadialBarChart cx="50%" cy="50%" innerRadius={50} outerRadius={76} startAngle={90} endAngle={-270} data={radialData}>
                   <RadialBar dataKey="value" cornerRadius={6} />
-                  <Tooltip {...TT} formatter={(value: number) => [`${value}%`, '']} />
+                  <Tooltip {...TT} formatter={(value) => [`${toNumber(value)}%`, '']} />
                 </RadialBarChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -1045,7 +1057,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={115} />
-                  <Tooltip {...TT} formatter={(value: number) => [value, 'Units']} />
+                  <Tooltip {...TT} formatter={(value) => [toNumber(value), 'Units']} />
                   <Bar dataKey="qty" radius={[0, 5, 5, 0]}>
                     {topProducts.map((_, i) => (
                       <Cell key={i} fill={i === 0 ? C_GREEN : i < 3 ? '#22c55e99' : '#86efac'} />
@@ -1063,7 +1075,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis type="number" tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={90} />
-                  <Tooltip {...TT} formatter={(value: number) => [fmt(value), 'Revenue']} />
+                  <Tooltip {...TT} formatter={(value) => [fmt(toNumber(value)), 'Revenue']} />
                   <Bar dataKey="value" radius={[0, 5, 5, 0]}>
                     {categoryData.map((_, i) => <Cell key={i} fill={CHART_PAL[i % CHART_PAL.length]} />)}
                   </Bar>
@@ -1094,7 +1106,7 @@ export default function AdminDashboard() {
                     <YAxis type="category" dataKey="pair" tick={{ fontSize: 10, fill: '#64748b' }} width={190} />
                     <Tooltip
                       {...TT}
-                      formatter={(value: number) => [value, 'Times bought together']}
+                      formatter={(value) => [toNumber(value), 'Times bought together']}
                       labelFormatter={(_, payload) => {
                         const row = payload?.[0]?.payload as BasketPairRow | undefined;
                         if (!row) return '';
