@@ -19,6 +19,7 @@ type AdminProfile = {
 };
 
 type Toast = { type: 'success' | 'error'; message: string } | null;
+type ProfileField = { icon: typeof Hash; label: string; value: string };
 
 const getAdminDisplayName = (profile: Partial<AdminProfile>) =>
   `${profile.first_name ?? ''} ${profile.last_name ?? ''}`.trim() || profile.full_name || '';
@@ -29,6 +30,88 @@ const getPasswordValidationMessage = (currentPw: string, newPw: string, confirmP
   if (newPw.length < 6) return 'New password must be at least 6 characters.';
   return null;
 };
+
+const getProfileInitials = (profile: AdminProfile | null) => {
+  const firstName = profile?.first_name ?? '';
+  const lastName = profile?.last_name ?? '';
+  if (firstName && lastName) return (firstName[0] + lastName[0]).toUpperCase();
+  return (profile?.full_name ?? 'AD').slice(0, 2).toUpperCase();
+};
+
+const didProfileNameChange = (profile: AdminProfile | null, firstName: string, lastName: string) =>
+  firstName.trim() !== (profile?.first_name ?? '') || lastName.trim() !== (profile?.last_name ?? '');
+
+const getProfileFields = (profile: AdminProfile | null): ProfileField[] => [
+  { icon: Hash, label: 'Staff ID', value: profile?.staff_number ?? '—' },
+  { icon: User, label: 'Username', value: profile?.username ? `@${profile.username}` : '—' },
+  { icon: Mail, label: 'Email', value: profile?.email ?? 'Not set yet' },
+  { icon: Shield, label: 'Role', value: 'Administrator' },
+  {
+    icon: Calendar,
+    label: 'Member Since',
+    value: profile?.created_at
+      ? new Date(profile.created_at).toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })
+      : '—',
+  },
+];
+
+function ToastBanner({ toast, onClose }: { toast: Exclude<Toast, null>; onClose: () => void }) {
+  const isSuccess = toast.type === 'success';
+
+  return (
+    <div className={`flex items-center gap-3 p-4 rounded-2xl text-sm font-medium border ${
+      isSuccess
+        ? 'bg-green-50 border-green-200 text-green-700'
+        : 'bg-red-50 border-red-200 text-red-700'
+    }`}>
+      {isSuccess
+        ? <CheckCircle2 className="w-4 h-4 shrink-0" />
+        : <AlertCircle className="w-4 h-4 shrink-0" />}
+      <span className="flex-1">{toast.message}</span>
+      <button onClick={onClose} className="opacity-50 hover:opacity-100 text-lg leading-none">×</button>
+    </div>
+  );
+}
+
+function AdminProfileCard({ profile, initials, fields }: { profile: AdminProfile | null; initials: string; fields: ProfileField[] }) {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="bg-gradient-to-br from-slate-800 to-slate-700 px-6 pt-8 pb-12 relative">
+        <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center shadow-xl mx-auto">
+          <span className="text-3xl font-black text-white">{initials}</span>
+        </div>
+      </div>
+
+      <div className="px-6 pt-4 pb-6 text-center border-b border-slate-100">
+        <p className="text-xl font-black text-slate-900">{profile?.full_name}</p>
+        {profile?.username && <p className="text-sm text-slate-400 mt-0.5">@{profile.username}</p>}
+        {profile?.email && <p className="text-xs text-slate-400">{profile.email}</p>}
+        <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
+          <span className="px-3 py-1 bg-blue-50 text-blue-600 text-xs font-black rounded-full flex items-center gap-1 border border-blue-100">
+            <Shield className="w-3 h-3" /> Administrator
+          </span>
+          <span className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-black rounded-full border border-slate-200">
+            {profile?.staff_number}
+          </span>
+        </div>
+      </div>
+
+      <div className="px-6 py-5 space-y-4">
+        {fields.map(({ icon: Icon, label, value }) => (
+          <div key={label} className="flex items-start gap-3">
+            <div className="p-1.5 bg-slate-100 rounded-lg shrink-0 mt-0.5">
+              <Icon className="w-3.5 h-3.5 text-slate-500" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</p>
+              <p className="text-sm font-semibold text-slate-700 truncate">{value}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function AdminProfilePage() {
   const [profile,    setProfile]    = useState<AdminProfile | null>(null);
@@ -129,80 +212,22 @@ export default function AdminProfilePage() {
     return <div className="flex items-center justify-center h-60"><Loader2 className="w-7 h-7 animate-spin text-blue-500" /></div>;
   }
 
-  const fn = profile?.first_name ?? '';
-  const ln = profile?.last_name ?? '';
-  const initials = fn && ln ? (fn[0] + ln[0]).toUpperCase() : (profile?.full_name ?? 'AD').slice(0, 2).toUpperCase();
-  const nameChanged = firstName.trim() !== (profile?.first_name ?? '') || lastName.trim() !== (profile?.last_name ?? '');
+  const initials = getProfileInitials(profile);
+  const nameChanged = didProfileNameChange(profile, firstName, lastName);
+  const profileFields = getProfileFields(profile);
 
   return (
     <div className="space-y-4">
 
       {/* Toast */}
-      {toast && (
-        <div className={`flex items-center gap-3 p-4 rounded-2xl text-sm font-medium border ${
-          toast.type === 'success'
-            ? 'bg-green-50 border-green-200 text-green-700'
-            : 'bg-red-50 border-red-200 text-red-700'
-        }`}>
-          {toast.type === 'success'
-            ? <CheckCircle2 className="w-4 h-4 shrink-0" />
-            : <AlertCircle className="w-4 h-4 shrink-0" />}
-          <span className="flex-1">{toast.message}</span>
-          <button onClick={() => setToast(null)} className="opacity-50 hover:opacity-100 text-lg leading-none">×</button>
-        </div>
-      )}
+      {toast && <ToastBanner toast={toast} onClose={() => setToast(null)} />}
 
       {/* ── Two-column layout ───────────────────────────────────────────────── */}
       <div className="grid lg:grid-cols-3 gap-4">
 
         {/* LEFT: Admin card */}
         <div className="lg:col-span-1">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-            {/* Gradient banner */}
-            <div className="bg-gradient-to-br from-slate-800 to-slate-700 px-6 pt-8 pb-12 relative">
-              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center shadow-xl mx-auto">
-                <span className="text-3xl font-black text-white">{initials}</span>
-              </div>
-            </div>
-
-            {/* Info below banner */}
-            <div className="px-6 pt-4 pb-6 text-center border-b border-slate-100">
-              <p className="text-xl font-black text-slate-900">{profile?.full_name}</p>
-              {profile?.username && <p className="text-sm text-slate-400 mt-0.5">@{profile.username}</p>}
-              {profile?.email && <p className="text-xs text-slate-400">{profile.email}</p>}
-              <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
-                <span className="px-3 py-1 bg-blue-50 text-blue-600 text-xs font-black rounded-full flex items-center gap-1 border border-blue-100">
-                  <Shield className="w-3 h-3" /> Administrator
-                </span>
-                <span className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-black rounded-full border border-slate-200">
-                  {profile?.staff_number}
-                </span>
-              </div>
-            </div>
-
-            {/* Details */}
-            <div className="px-6 py-5 space-y-4">
-              {[
-                { icon: Hash,     label: 'Staff ID',    value: profile?.staff_number ?? '—' },
-                { icon: User,     label: 'Username',    value: profile?.username ? `@${profile.username}` : '—' },
-                { icon: Mail,     label: 'Email',       value: profile?.email ?? 'Not set yet' },
-                { icon: Shield,   label: 'Role',        value: 'Administrator' },
-                { icon: Calendar, label: 'Member Since', value: profile?.created_at
-                    ? new Date(profile.created_at).toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })
-                    : '—' },
-              ].map(({ icon: Icon, label, value }) => (
-                <div key={label} className="flex items-start gap-3">
-                  <div className="p-1.5 bg-slate-100 rounded-lg shrink-0 mt-0.5">
-                    <Icon className="w-3.5 h-3.5 text-slate-500" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</p>
-                    <p className="text-sm font-semibold text-slate-700 truncate">{value}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <AdminProfileCard profile={profile} initials={initials} fields={profileFields} />
         </div>
 
         {/* RIGHT: Edit forms */}

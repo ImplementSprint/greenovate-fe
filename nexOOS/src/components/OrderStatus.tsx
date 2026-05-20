@@ -44,6 +44,32 @@ const MAX_TRACKING_POLL_DELAY_MS = 300_000;
 const getNextPollDelay = (didFail: boolean, currentDelay: number) =>
   didFail ? Math.min(currentDelay * 2, MAX_TRACKING_POLL_DELAY_MS) : TRACKING_POLL_DELAY_MS;
 
+const canCancelOrder = (order: Order | null) =>
+  order?.status === 'Processing' &&
+  Date.now() - new Date(order.date).getTime() < CANCEL_WINDOW_MS;
+
+const canRequestReturn = (order: Order | null) =>
+  order?.status === 'Delivered' &&
+  Date.now() - new Date(order.date).getTime() < 30 * 24 * 60 * 60 * 1000;
+
+function EmptyOrderState({ onBack }: { onBack: () => void }) {
+  return (
+    <main className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50">
+      <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center mb-6 shadow-xl shadow-slate-200">
+        <Package className="w-10 h-10 text-slate-300" />
+      </div>
+      <h2 className="text-3xl font-black text-slate-900 mb-2 tracking-tight">Order not found</h2>
+      <p className="text-slate-500 mb-8 max-w-xs mx-auto">We couldn&apos;t find the order you&apos;re looking for.</p>
+      <button
+        onClick={onBack}
+        className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg hover:bg-blue-700 transition-all shadow-xl shadow-blue-100"
+      >
+        Back to Account
+      </button>
+    </main>
+  );
+}
+
 export default function OrderStatus() {
   const { selectedOrder, setView, setOrders, setSelectedOrder } = useAppContext();
   const delayRef = useRef(30_000);
@@ -163,9 +189,8 @@ export default function OrderStatus() {
       .catch(() => {});
   }, [selectedOrder?.receiptNumber, selectedOrder?.status, returnSuccess]);
 
-  const canCancel =
-    selectedOrder?.status === 'Processing' &&
-    Date.now() - new Date(selectedOrder.date).getTime() < CANCEL_WINDOW_MS;
+  const canCancel = canCancelOrder(selectedOrder);
+  const canRequestReturnFlow = canRequestReturn(selectedOrder);
 
   const handleCancelOrder = async () => {
     if (!selectedOrder?.receiptNumber || isCancelling) return;
@@ -195,21 +220,7 @@ export default function OrderStatus() {
   };
 
   if (!selectedOrder) {
-    return (
-      <main className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50">
-        <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center mb-6 shadow-xl shadow-slate-200">
-          <Package className="w-10 h-10 text-slate-300" />
-        </div>
-        <h2 className="text-3xl font-black text-slate-900 mb-2 tracking-tight">Order not found</h2>
-        <p className="text-slate-500 mb-8 max-w-xs mx-auto">We couldn&apos;t find the order you&apos;re looking for.</p>
-        <button 
-          onClick={() => setView('account')}
-          className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg hover:bg-blue-700 transition-all shadow-xl shadow-blue-100"
-        >
-          Back to Account
-        </button>
-      </main>
-    );
+    return <EmptyOrderState onBack={() => setView('account')} />;
   }
 
   return (
@@ -372,8 +383,7 @@ export default function OrderStatus() {
               </div>
             )}
 
-            {selectedOrder.status === 'Delivered' &&
-             Date.now() - new Date(selectedOrder.date).getTime() < 30 * 24 * 60 * 60 * 1000 && (
+            {canRequestReturnFlow && (
               <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-amber-100">
                 <h3 className="text-lg font-black text-slate-900 mb-2 tracking-tight">Return / Refund</h3>
 
