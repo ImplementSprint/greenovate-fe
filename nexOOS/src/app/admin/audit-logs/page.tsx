@@ -60,23 +60,25 @@ const CAT_ICON_BG: Record<string, string> = {
   general: 'bg-slate-200',
 };
 
+const CATEGORY_ICONS: Record<string, React.ElementType> = {
+  auth: LogIn,
+  orders: ShoppingBag,
+  returns: RotateCcw,
+  accounts: Users,
+  settings: Settings,
+  profile: User,
+  general: ScrollText,
+};
+
 const PAGE_SIZE = 20;
 
 function CategoryIcon({ category }: { category: string }) {
   const bg = CAT_ICON_BG[category] ?? 'bg-slate-100';
-  const props = { className: 'h-4 w-4' };
-  const icon =
-    category === 'auth' ? <LogIn {...props} /> :
-    category === 'orders' ? <ShoppingBag {...props} /> :
-    category === 'returns' ? <RotateCcw {...props} /> :
-    category === 'accounts' ? <Users {...props} /> :
-    category === 'settings' ? <Settings {...props} /> :
-    category === 'profile' ? <User {...props} /> :
-    <ScrollText {...props} />;
+  const Icon = CATEGORY_ICONS[category] ?? CATEGORY_ICONS.general;
 
   return (
     <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${bg}`}>
-      {icon}
+      <Icon className="h-4 w-4" />
     </div>
   );
 }

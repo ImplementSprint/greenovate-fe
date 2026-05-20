@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { buildApiUrl, fetchJsonWithRetry } from '@/lib/api';
-import { Product } from '../types';
+import { Branch, Product } from '../types';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 const SORT_OPTIONS = [
@@ -27,6 +27,65 @@ const SORT_OPTIONS = [
 ] as const;
 
 type SortOption = (typeof SORT_OPTIONS)[number]['value'];
+
+const compareLabels = (left: string, right: string) => left.localeCompare(right);
+const getProductScore = (
+  product: Product,
+  interestMap: Map<string, number>,
+  categoryInterestMap: Map<string, number>,
+) =>
+  ((categoryInterestMap.get(product.category) ?? 0) * 100) +
+  ((interestMap.get(product.id) ?? 0) * 10) +
+  (product.sold ?? 0);
+
+const rankForYouProducts = (
+  products: Product[],
+  interestMap: Map<string, number>,
+  categoryInterestMap: Map<string, number>,
+) => [...products].sort((left, right) =>
+  getProductScore(right, interestMap, categoryInterestMap) -
+  getProductScore(left, interestMap, categoryInterestMap),
+);
+
+const buildProductQueryParams = ({
+  searchQuery,
+  hasCategoryFilter,
+  selectedCategories,
+  priceRange,
+  inStockOnly,
+  selectedBranch,
+  sortBy,
+}: {
+  searchQuery: string;
+  hasCategoryFilter: boolean;
+  selectedCategories: string[];
+  priceRange: { min: string; max: string };
+  inStockOnly: boolean;
+  selectedBranch: Branch | null;
+  sortBy: SortOption;
+}) => {
+  const params = new URLSearchParams();
+
+  if (searchQuery.trim()) params.set('q', searchQuery.trim());
+  if (hasCategoryFilter) {
+    selectedCategories.forEach((category) => params.append('category', category));
+  }
+  if (priceRange.min.trim()) params.set('minPrice', priceRange.min.trim());
+  if (priceRange.max.trim()) params.set('maxPrice', priceRange.max.trim());
+  if (inStockOnly) params.set('inStockOnly', 'true');
+  if (selectedBranch) params.set('branchId', String(selectedBranch.id));
+  params.set('sortBy', getApiSortByValue(sortBy));
+
+  return params;
+};
+
+const shouldShowDynamicCategories = (searchQuery: string, hasCategoryFilter: boolean) =>
+  !searchQuery.trim() && !hasCategoryFilter;
+
+const getAvailableCategories = (products: Product[]) => [
+  'All',
+  ...Array.from(new Set(products.map((product) => product.category).filter(Boolean))).sort(compareLabels),
+];
 
 const getProductStock = (product: Product, inventoryStock?: number) => {
   if (typeof product.stock === 'number') {
@@ -89,7 +148,6 @@ export default function Shop() {
     setView,
     addToCart,
     setSelectedProduct,
-    selectedProduct,
     searchQuery,
     setSearchQuery,
     interestMap,
@@ -137,19 +195,15 @@ export default function Shop() {
         setIsLoading(true);
         setError('');
 
-        const params = new URLSearchParams();
-
-        if (searchQuery.trim()) params.set('q', searchQuery.trim());
-        if (hasCategoryFilter) {
-          selectedCategories.forEach((category) => params.append('category', category));
-        }
-        if (priceRange.min.trim()) params.set('minPrice', priceRange.min.trim());
-        if (priceRange.max.trim()) params.set('maxPrice', priceRange.max.trim());
-        if (inStockOnly) params.set('inStockOnly', 'true');
-        if (selectedBranch) params.set('branchId', String(selectedBranch.id));
-        // Fetch best-selling products for both "For You" and "Top Sold".
-        // "For You" is then re-ranked client-side using browsing interests.
-        params.set('sortBy', getApiSortByValue(sortBy));
+        const params = buildProductQueryParams({
+          searchQuery,
+          hasCategoryFilter,
+          selectedCategories,
+          priceRange,
+          inStockOnly,
+          selectedBranch,
+          sortBy,
+        });
 
         const payload = await fetchJsonWithRetry<{ data?: Product[] }>(
           `/api/products?${params.toString()}`,
@@ -160,23 +214,12 @@ export default function Shop() {
         rawProductsRef.current = fetched;
 
         // Build category list dynamically from all products (no filter applied yet)
-        if (!searchQuery.trim() && !hasCategoryFilter) {
-          const cats = ['All', ...Array.from(new Set(fetched.map((p) => p.category).filter(Boolean))).sort()];
-          setAvailableCategories(cats);
+        if (shouldShowDynamicCategories(searchQuery, hasCategoryFilter)) {
+          setAvailableCategories(getAvailableCategories(fetched));
         }
 
-        // Apply Shopee-style scoring immediately if interests are already loaded
         if (sortBy === 'for-you' && (interestMap.size > 0 || categoryInterestMap.size > 0)) {
-          const scored = [...fetched].sort((a, b) => {
-            const catA = (categoryInterestMap.get(a.category) ?? 0) * 100;
-            const catB = (categoryInterestMap.get(b.category) ?? 0) * 100;
-            const prodA = (interestMap.get(a.id) ?? 0) * 10;
-            const prodB = (interestMap.get(b.id) ?? 0) * 10;
-            const soldA = a.sold ?? 0;
-            const soldB = b.sold ?? 0;
-            return (catB + prodB + soldB) - (catA + prodA + soldA);
-          });
-          setProducts(scored);
+          setProducts(rankForYouProducts(fetched, interestMap, categoryInterestMap));
         } else {
           setProducts(fetched);
         }
@@ -202,7 +245,20 @@ export default function Shop() {
     fetchProducts();
 
     return () => controller.abort();
-  }, [searchQuery, selectedCategories, hasCategoryFilter, priceRange.min, priceRange.max, inStockOnly, sortBy, selectedBranch]);
+  }, [
+    searchQuery,
+    selectedCategories,
+    hasCategoryFilter,
+    priceRange,
+    priceRange.min,
+    priceRange.max,
+    inStockOnly,
+    sortBy,
+    selectedBranch,
+    selectedBranch?.id,
+    interestMap,
+    categoryInterestMap,
+  ]);
 
   useEffect(() => {
     const trimmedQuery = searchQuery.trim();

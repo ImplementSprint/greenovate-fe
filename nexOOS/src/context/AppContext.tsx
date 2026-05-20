@@ -221,6 +221,27 @@ const normalizeOrderPayload = (payload: unknown): Order[] => {
   });
 };
 
+const fetchInterestRows = async <TRow,>(
+  endpoint: string,
+  token: string,
+): Promise<TRow[]> => {
+  const response = await fetch(endpoint, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const payload = response.ok ? await response.json() : { data: [] };
+  return (payload?.data ?? []) as TRow[];
+};
+
+const mapInterestRows = <TRow,>(
+  rows: TRow[],
+  getKey: (row: TRow) => string,
+  getValue: (row: TRow) => number,
+) => {
+  const mapped = new Map<string, number>();
+  rows.forEach((row) => mapped.set(getKey(row), getValue(row)));
+  return mapped;
+};
+
 export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [view, setView] = useState('home');
   const [accountSubView, setAccountSubView] = useState<AccountSubView>('profile');
@@ -356,34 +377,22 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
 
   // Fetch product + category interests on login, refresh every 15 minutes
   useEffect(() => {
-    const fetchInterests = () => {
+    const fetchInterests = async () => {
       const token = getAccessToken();
       if (!token || !isLoggedIn) return;
 
-      // Product-level interests
-      fetch('/api/product-interests', { headers: { Authorization: `Bearer ${token}` } })
-        .then((res) => res.ok ? res.json() : { data: [] })
-        .then((payload) => {
-          const rows: { product_id: string; view_count: number }[] = payload?.data ?? [];
-          const map = new Map<string, number>();
-          rows.forEach((r) => map.set(r.product_id, r.view_count));
-          setInterestMap(map);
-        })
-        .catch(() => {});
+      try {
+        const [productRows, categoryRows] = await Promise.all([
+          fetchInterestRows<{ product_id: string; view_count: number }>('/api/product-interests', token),
+          fetchInterestRows<{ category: string; score: number }>('/api/category-interests', token),
+        ]);
 
-      // Category-level interests
-      fetch('/api/category-interests', { headers: { Authorization: `Bearer ${token}` } })
-        .then((res) => res.ok ? res.json() : { data: [] })
-        .then((payload) => {
-          const rows: { category: string; score: number }[] = payload?.data ?? [];
-          const map = new Map<string, number>();
-          rows.forEach((r) => map.set(r.category, r.score));
-          setCategoryInterestMap(map);
-        })
-        .catch(() => {});
+        setInterestMap(mapInterestRows(productRows, row => row.product_id, row => row.view_count));
+        setCategoryInterestMap(mapInterestRows(categoryRows, row => row.category, row => row.score));
+      } catch {}
     };
 
-    fetchInterests();
+    void fetchInterests();
     const interval = globalThis.setInterval(fetchInterests, 15 * 60 * 1000);
     return () => globalThis.clearInterval(interval);
   }, [isLoggedIn]);

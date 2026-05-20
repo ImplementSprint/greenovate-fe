@@ -37,6 +37,12 @@ const getTransitHeadingClassName = (status: string) => {
 };
 
 const CANCEL_WINDOW_MS = 5 * 60 * 1000;
+const TERMINAL_ORDER_STATUSES = new Set<Order['status']>(['Delivered', 'Cancelled']);
+const TRACKING_POLL_DELAY_MS = 30_000;
+const MAX_TRACKING_POLL_DELAY_MS = 300_000;
+
+const getNextPollDelay = (didFail: boolean, currentDelay: number) =>
+  didFail ? Math.min(currentDelay * 2, MAX_TRACKING_POLL_DELAY_MS) : TRACKING_POLL_DELAY_MS;
 
 export default function OrderStatus() {
   const { selectedOrder, setView, setOrders, setSelectedOrder } = useAppContext();
@@ -107,10 +113,9 @@ export default function OrderStatus() {
   };
 
   useEffect(() => {
-    const TERMINAL = new Set(['Delivered', 'Cancelled']);
-    if (!selectedOrder?.receiptNumber || TERMINAL.has(selectedOrder.status)) return;
+    if (!selectedOrder?.receiptNumber || TERMINAL_ORDER_STATUSES.has(selectedOrder.status)) return;
 
-    delayRef.current = 30_000;
+    delayRef.current = TRACKING_POLL_DELAY_MS;
     let timeoutId: ReturnType<typeof setTimeout>;
     const { id, receiptNumber, status } = selectedOrder;
 
@@ -120,6 +125,8 @@ export default function OrderStatus() {
     };
 
     const poll = async () => {
+      let didFail = false;
+
       try {
         const res = await fetch(`/api/orders/track?receiptNumber=${encodeURIComponent(receiptNumber!)}`);
         if (res.ok) {
@@ -128,17 +135,20 @@ export default function OrderStatus() {
             const nextStatus = data.status as Order['status'];
             applyStatusUpdate(nextStatus);
           }
-          delayRef.current = 30_000;
         }
       } catch {
-        delayRef.current = Math.min(delayRef.current * 2, 300_000);
+        didFail = true;
       }
-      if (!TERMINAL.has(selectedOrder.status)) timeoutId = setTimeout(poll, delayRef.current);
+
+      delayRef.current = getNextPollDelay(didFail, delayRef.current);
+      if (!TERMINAL_ORDER_STATUSES.has(selectedOrder.status)) {
+        timeoutId = setTimeout(poll, delayRef.current);
+      }
     };
 
     timeoutId = setTimeout(poll, delayRef.current);
     return () => clearTimeout(timeoutId);
-  }, [selectedOrder?.id, selectedOrder?.status]);
+  }, [selectedOrder, selectedOrder?.id, selectedOrder?.status, setOrders, setSelectedOrder]);
 
   // Fetch existing return request for this order if it's Delivered
   useEffect(() => {
