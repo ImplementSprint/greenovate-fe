@@ -16,7 +16,7 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 
 # Build the Next.js app
-RUN npm run build:POS-frontend
+RUN npm run build
 
 # Production image
 FROM node:22-alpine3.23 AS runner
@@ -28,7 +28,7 @@ RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
 # Set environment variables
-ENV PORT=3030
+ENV PORT=3000
 ENV NODE_ENV=production
 ENV HOSTNAME="0.0.0.0"
 
@@ -40,6 +40,6 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Switch to non-root user
 USER nextjs
 
-EXPOSE 3030
+EXPOSE 3000
 
 CMD ["node", "server.js"]
