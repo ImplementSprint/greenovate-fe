@@ -93,6 +93,7 @@ export const useInactivityLogout = ({
 
   return {
     resetTimer,
+    // eslint-disable-next-line react-hooks/refs
     lastActivity: lastActivityRef.current,
   };
 };
