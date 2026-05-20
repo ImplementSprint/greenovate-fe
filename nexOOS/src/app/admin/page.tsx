@@ -660,6 +660,410 @@ function SectionCard({ title, href, linkLabel = 'View all', children }: {
   );
 }
 
+export function DashboardOverviewSection({
+  needsAttention,
+  orderStats,
+  authStats,
+  recent,
+  returns,
+}: {
+  needsAttention: number;
+  orderStats: OrderStats | null;
+  authStats: AuthStats | null;
+  recent: Order[];
+  returns: ReturnReq[];
+}) {
+  return (
+    <>
+      {needsAttention > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-3.5 flex items-center gap-3">
+          <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+          <p className="text-sm font-medium text-amber-800">
+            <span className="font-bold">{orderStats?.pendingOrders ?? 0} pending orders</span>
+            {(orderStats?.pendingReturns ?? 0) > 0 && <> and <span className="font-bold">{orderStats!.pendingReturns} return requests</span></>}
+            {' '}need your attention.
+          </p>
+          <Link href="/admin/orders" className="ml-auto text-xs font-bold text-amber-600 hover:text-amber-800 flex items-center gap-1 shrink-0 transition-colors">
+            Review <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+      )}
+
+      <div>
+        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Today</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <KpiCard label="Revenue Today" value={fmt2(orderStats?.todayRevenue ?? 0)} sub="Non-cancelled" icon={TrendingUp} iconBg="bg-blue-50" iconColor="text-blue-600" />
+          <KpiCard label="Orders Today" value={orderStats?.ordersToday ?? 0} sub="All statuses" icon={ShoppingBag} iconBg="bg-slate-100" iconColor="text-slate-600" href="/admin/orders" />
+          <KpiCard label="New Customers" value={authStats?.newToday ?? 0} sub="Registered today" icon={Users} iconBg="bg-slate-100" iconColor="text-slate-600" href="/admin/customers" />
+          <KpiCard label="Pending Returns" value={orderStats?.pendingReturns ?? 0} sub="Awaiting review" icon={RotateCcw} iconBg="bg-amber-50" iconColor="text-amber-600" href="/admin/returns" />
+        </div>
+      </div>
+
+      <div>
+        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Order Pipeline</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            { label: 'Processing', value: orderStats?.processingOrders ?? 0, icon: Clock, iconBg: 'bg-blue-50', iconColor: 'text-blue-500', border: 'border-blue-100' },
+            { label: 'In Transit', value: orderStats?.inTransitOrders ?? 0, icon: Truck, iconBg: 'bg-amber-50', iconColor: 'text-amber-500', border: 'border-amber-100' },
+            { label: 'Delivered', value: orderStats?.deliveredOrders ?? 0, icon: CheckCircle2, iconBg: 'bg-green-50', iconColor: 'text-green-600', border: 'border-green-100' },
+            { label: 'Cancelled', value: orderStats?.cancelledOrders ?? 0, icon: XCircle, iconBg: 'bg-red-50', iconColor: 'text-red-400', border: 'border-red-100' },
+          ].map(({ label, value, icon: Icon, iconBg, iconColor, border }) => (
+            <Link key={label} href="/admin/orders" className={`bg-white border ${border} rounded-2xl p-4 flex items-center gap-3 hover:shadow-sm transition-all group`}>
+              <div className={`p-2.5 rounded-xl ${iconBg} shrink-0`}>
+                <Icon className={`w-4 h-4 ${iconColor}`} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-2xl font-black text-slate-900">{value}</p>
+                <p className="text-xs font-semibold text-slate-400 truncate">{label}</p>
+              </div>
+              <ArrowRight className="w-4 h-4 text-slate-300 opacity-0 group-hover:opacity-100 ml-auto transition-opacity shrink-0" />
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <SectionCard title="Recent Orders" href="/admin/orders">
+          {recent.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-slate-300">
+              <Package className="w-7 h-7 mb-2" /><p className="text-xs">No orders yet</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-50">
+              {recent.map((order) => (
+                <div key={order.id} className="flex items-center gap-3 px-5 py-3.5">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-slate-800">{order.receiptNumber ?? order.id.slice(0, 8)}</p>
+                    <p className="text-xs text-slate-400 truncate">{order.shippingAddress}</p>
+                  </div>
+                  <div className="text-right shrink-0 hidden sm:block">
+                    <p className="text-sm font-semibold text-slate-800">{fmt2(order.total)}</p>
+                    <p className="text-[10px] text-slate-400">{timeAgo(order.date)}</p>
+                  </div>
+                  <StatusBadge status={order.status} />
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard title="Pending Returns" href="/admin/returns" linkLabel="Manage">
+          {returns.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-slate-300">
+              <CheckCircle2 className="w-7 h-7 mb-2" /><p className="text-xs">No pending returns</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-50">
+              {returns.map((request) => (
+                <div key={request.id} className="flex items-center gap-3 px-5 py-3.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
+                    <RotateCcw className="w-3.5 h-3.5 text-amber-500" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-slate-800">{request.receipt_number}</p>
+                    <p className="text-xs text-slate-400 truncate">{request.reason}</p>
+                  </div>
+                  <p className="text-[10px] text-slate-400 shrink-0">{timeAgo(request.created_at)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+      </div>
+    </>
+  );
+}
+
+export function DashboardFilterBar({
+  viewType,
+  year,
+  month,
+  compareYear,
+  periodLabel,
+  setViewType,
+  setYear,
+  setMonth,
+  setCompareYear,
+}: {
+  viewType: ViewType;
+  year: number;
+  month: number;
+  compareYear: number;
+  periodLabel: string;
+  setViewType: React.Dispatch<React.SetStateAction<ViewType>>;
+  setYear: React.Dispatch<React.SetStateAction<number>>;
+  setMonth: React.Dispatch<React.SetStateAction<number>>;
+  setCompareYear: React.Dispatch<React.SetStateAction<number>>;
+}) {
+  return (
+    <div className="bg-white border border-slate-100 shadow-sm rounded-2xl p-4 flex flex-wrap items-center gap-5 mb-4">
+      <div>
+        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">View Type</p>
+        <div className="flex gap-1.5">
+          {([
+            { key: 'overall', label: 'Overall' },
+            { key: 'month', label: 'Month' },
+            { key: 'year', label: 'Year' },
+            { key: 'compare', label: 'Compare' },
+          ] as { key: ViewType; label: string }[]).map(({ key, label }) => (
+            <button key={key} onClick={() => setViewType(key)} className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all border ${
+              viewType === key
+                ? 'bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-100'
+                : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300 hover:text-slate-700'
+            }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {viewType !== 'overall' && (
+        <div>
+          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+            {viewType === 'compare' ? 'Year A' : 'Year'}
+          </p>
+          <select value={year} onChange={(e) => setYear(Number(e.target.value))} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-blue-400">
+            {YEARS.map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </div>
+      )}
+
+      {viewType === 'month' && (
+        <div>
+          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Month</p>
+          <select value={month} onChange={(e) => setMonth(Number(e.target.value))} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-blue-400">
+            {MONTHS_LONG.map((label, index) => <option key={label} value={index}>{label}</option>)}
+          </select>
+        </div>
+      )}
+
+      {viewType === 'compare' && (
+        <div>
+          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Year B</p>
+          <select value={compareYear} onChange={(e) => setCompareYear(Number(e.target.value))} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-blue-400">
+            {YEARS.map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </div>
+      )}
+
+      <div className="ml-auto text-right">
+        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Showing</p>
+        <p className="text-sm font-bold text-blue-600">{periodLabel}</p>
+      </div>
+    </div>
+  );
+}
+
+export function DashboardPeriodKpis({
+  periodRevenue,
+  periodOrders,
+  delivered,
+  fulfillment,
+  periodLabel,
+  authStats,
+}: {
+  periodRevenue: number;
+  periodOrders: number;
+  delivered: number;
+  fulfillment: number;
+  periodLabel: string;
+  authStats: AuthStats | null;
+}) {
+  return (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      <KpiCard label="Period Revenue" value={fmt(periodRevenue)} sub={periodLabel} icon={TrendingUp} iconBg="bg-blue-50" iconColor="text-blue-600" />
+      <KpiCard label="Period Orders" value={periodOrders} sub={`${delivered} delivered`} icon={ShoppingBag} iconBg="bg-slate-100" iconColor="text-slate-600" />
+      <KpiCard label="Fulfillment" value={`${fulfillment}%`} sub="Orders delivered" icon={CheckCircle2} iconBg="bg-green-50" iconColor="text-green-600" />
+      <KpiCard label="All Customers" value={authStats?.totalCustomers ?? 0} sub="Total registered" icon={Users} iconBg="bg-slate-100" iconColor="text-slate-600" />
+    </div>
+  );
+}
+
+export function RevenueAndOrdersCharts({
+  viewType,
+  timeSeries,
+  periodLabel,
+  year,
+  compareYear,
+}: {
+  viewType: ViewType;
+  timeSeries: Array<Record<string, number | string>>;
+  periodLabel: string;
+  year: number;
+  compareYear: number;
+}) {
+  return (
+    <div className="grid lg:grid-cols-2 gap-4 mb-4">
+      <ChartCard title={`Revenue - ${periodLabel}`}>
+        <ResponsiveContainer width="100%" height={220}>
+          {viewType === 'compare' ? (
+            <LineChart data={timeSeries} margin={{ top: 4, right: 8, left: -10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <YAxis tickFormatter={(value) => `P${value >= 1000 ? (value / 1000).toFixed(1) + 'k' : value}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <Tooltip {...TT} formatter={(value, name) => [fmt(toNumber(value)), String(name)]} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Line type="monotone" dataKey={String(year)} stroke={C_BLUE} strokeWidth={2.5} dot={{ r: 3, fill: C_BLUE }} activeDot={{ r: 5 }} />
+              <Line type="monotone" dataKey={String(compareYear)} stroke={C_SLATE} strokeWidth={2} dot={{ r: 3, fill: C_SLATE }} activeDot={{ r: 5 }} strokeDasharray="5 4" />
+            </LineChart>
+          ) : (
+            <AreaChart data={timeSeries} margin={{ top: 4, right: 8, left: -10, bottom: 0 }}>
+              <defs>
+                <linearGradient id="rg" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C_BLUE} stopOpacity={0.15} />
+                  <stop offset="95%" stopColor={C_BLUE} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="label" tick={{ fontSize: viewType === 'month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType === 'month' ? 4 : 0} />
+              <YAxis tickFormatter={(value) => `P${value >= 1000 ? (value / 1000).toFixed(1) + 'k' : value}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <Tooltip {...TT} formatter={(value) => [fmt(toNumber(value)), 'Revenue']} />
+              <Area type="monotone" dataKey="revenue" stroke={C_BLUE} strokeWidth={2} fill="url(#rg)" dot={false} activeDot={{ r: 4, fill: C_BLUE }} />
+            </AreaChart>
+          )}
+        </ResponsiveContainer>
+      </ChartCard>
+
+      <ChartCard title={`Orders - ${periodLabel}`}>
+        <ResponsiveContainer width="100%" height={220}>
+          {viewType === 'compare' ? (
+            <BarChart data={timeSeries} margin={{ top: 4, right: 8, left: -10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <Tooltip {...TT} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Bar dataKey={String(year)} fill={C_BLUE} radius={[4, 4, 0, 0]} />
+              <Bar dataKey={String(compareYear)} fill="#cbd5e1" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          ) : (
+            <BarChart data={timeSeries} margin={{ top: 4, right: 8, left: -10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="label" tick={{ fontSize: viewType === 'month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType === 'month' ? 4 : 0} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <Tooltip {...TT} formatter={(value) => [toNumber(value), 'Orders']} />
+              <Bar dataKey="orders" fill={C_INDIGO} radius={[4, 4, 0, 0]}>
+                {timeSeries.map((_, index) => (
+                  <Cell key={index} fill={index % 2 === 0 ? C_INDIGO : '#818cf8'} />
+                ))}
+              </Bar>
+            </BarChart>
+          )}
+        </ResponsiveContainer>
+      </ChartCard>
+    </div>
+  );
+}
+
+export function DistributionCharts({
+  periodOrders,
+  statusData,
+  paymentData,
+  radialData,
+  fulfillment,
+}: {
+  periodOrders: number;
+  statusData: { name: string; value: number; fill: string }[];
+  paymentData: { name: string; value: number }[];
+  radialData: { name: string; value: number; fill: string }[];
+  fulfillment: number;
+}) {
+  return (
+    <div className="grid lg:grid-cols-3 gap-4 mb-4">
+      <ChartCard title="Orders by Status">
+        {periodOrders === 0 ? <EmptyChart /> : (
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={statusData} cx="50%" cy="50%" innerRadius={50} outerRadius={76} paddingAngle={3} dataKey="value">
+                {statusData.map((entry, index) => <Cell key={index} fill={entry.fill} />)}
+              </Pie>
+              <Tooltip {...TT} />
+              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+            </PieChart>
+          </ResponsiveContainer>
+        )}
+      </ChartCard>
+
+      <ChartCard title="Payment Methods">
+        {paymentData.length === 0 ? <EmptyChart /> : (
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={paymentData} cx="50%" cy="50%" outerRadius={76} paddingAngle={3} dataKey="value">
+                {paymentData.map((_, index) => <Cell key={index} fill={CHART_PAL[index % CHART_PAL.length]} />)}
+              </Pie>
+              <Tooltip {...TT} />
+              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+            </PieChart>
+          </ResponsiveContainer>
+        )}
+      </ChartCard>
+
+      <ChartCard title="Fulfillment Rate">
+        <div className="relative">
+          <ResponsiveContainer width="100%" height={200}>
+            <RadialBarChart cx="50%" cy="50%" innerRadius={50} outerRadius={76} startAngle={90} endAngle={-270} data={radialData}>
+              <RadialBar dataKey="value" cornerRadius={6} />
+              <Tooltip {...TT} formatter={(value) => [`${toNumber(value)}%`, '']} />
+            </RadialBarChart>
+          </ResponsiveContainer>
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="text-center">
+              <p className="text-3xl font-black text-slate-900">{fulfillment}%</p>
+              <p className="text-xs text-slate-400 font-semibold mt-0.5">Delivered</p>
+            </div>
+          </div>
+        </div>
+      </ChartCard>
+    </div>
+  );
+}
+
+export function ProductPerformanceCharts({
+  topProducts,
+  categoryData,
+}: {
+  topProducts: { name: string; qty: number }[];
+  categoryData: { name: string; value: number }[];
+}) {
+  return (
+    <div className="grid lg:grid-cols-2 gap-4 mb-4">
+      <ChartCard title="Top Products by Units Sold">
+        {topProducts.length === 0 ? <EmptyChart /> : (
+          <ResponsiveContainer width="100%" height={230}>
+            <BarChart data={topProducts} layout="vertical" margin={{ top: 4, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
+              <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={115} />
+              <Tooltip {...TT} formatter={(value) => [toNumber(value), 'Units']} />
+              <Bar dataKey="qty" radius={[0, 5, 5, 0]}>
+                {topProducts.map((_, index) => (
+                  <Cell key={index} fill={index === 0 ? C_GREEN : index < 3 ? '#22c55e99' : '#86efac'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </ChartCard>
+
+      <ChartCard title="Revenue by Category">
+        {categoryData.length === 0 ? <EmptyChart /> : (
+          <ResponsiveContainer width="100%" height={230}>
+            <BarChart data={categoryData} layout="vertical" margin={{ top: 4, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
+              <XAxis type="number" tickFormatter={(value) => `P${value >= 1000 ? (value / 1000).toFixed(1) + 'k' : value}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={90} />
+              <Tooltip {...TT} formatter={(value) => [fmt(toNumber(value)), 'Revenue']} />
+              <Bar dataKey="value" radius={[0, 5, 5, 0]}>
+                {categoryData.map((_, index) => <Cell key={index} fill={CHART_PAL[index % CHART_PAL.length]} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </ChartCard>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function AdminDashboard() {
   const [allOrders,  setAllOrders]  = useState<Order[]>([]);
