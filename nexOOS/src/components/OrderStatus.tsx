@@ -70,6 +70,25 @@ function EmptyOrderState({ onBack }: { onBack: () => void }) {
   );
 }
 
+function applyTrackedOrderStatus(
+  order: Order,
+  newStatus: Order['status'],
+  setOrders: React.Dispatch<React.SetStateAction<Order[]>>,
+  setSelectedOrder: (order: Order) => void,
+) {
+  setOrders((prev) => prev.map((item) => item.id === order.id ? { ...item, status: newStatus } : item));
+  setSelectedOrder({ ...order, status: newStatus });
+}
+
+async function fetchTrackedOrderStatus(receiptNumber: string, currentStatus: Order['status']) {
+  const response = await fetch(`/api/orders/track?receiptNumber=${encodeURIComponent(receiptNumber)}`);
+  if (!response.ok) return null;
+
+  const payload = await response.json();
+  if (typeof payload.status !== 'string' || payload.status === currentStatus) return null;
+  return payload.status as Order['status'];
+}
+
 export default function OrderStatus() {
   const { selectedOrder, setView, setOrders, setSelectedOrder } = useAppContext();
   const delayRef = useRef(30_000);
@@ -143,31 +162,22 @@ export default function OrderStatus() {
 
     delayRef.current = TRACKING_POLL_DELAY_MS;
     let timeoutId: ReturnType<typeof setTimeout>;
-    const { id, receiptNumber, status } = selectedOrder;
-
-    const applyStatusUpdate = (newStatus: Order['status']) => {
-      setOrders((prev) => prev.map((o) => o.id === id ? { ...o, status: newStatus } : o));
-      setSelectedOrder({ ...selectedOrder, status: newStatus });
-    };
+    const order = selectedOrder;
 
     const poll = async () => {
       let didFail = false;
 
       try {
-        const res = await fetch(`/api/orders/track?receiptNumber=${encodeURIComponent(receiptNumber!)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (typeof data.status === 'string' && data.status !== status) {
-            const nextStatus = data.status as Order['status'];
-            applyStatusUpdate(nextStatus);
-          }
+        const nextStatus = await fetchTrackedOrderStatus(order.receiptNumber!, order.status);
+        if (nextStatus) {
+          applyTrackedOrderStatus(order, nextStatus, setOrders, setSelectedOrder);
         }
       } catch {
         didFail = true;
       }
 
       delayRef.current = getNextPollDelay(didFail, delayRef.current);
-      if (!TERMINAL_ORDER_STATUSES.has(selectedOrder.status)) {
+      if (!TERMINAL_ORDER_STATUSES.has(order.status)) {
         timeoutId = setTimeout(poll, delayRef.current);
       }
     };
