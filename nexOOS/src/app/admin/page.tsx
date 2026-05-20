@@ -530,6 +530,195 @@ function SectionCard({ title, href, linkLabel = 'View all', children }: {
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
+const getStatusFill = (status: string) => {
+  if (status === 'Processing') return C_BLUE;
+  if (status === 'In Transit') return C_AMBER;
+  if (status === 'Delivered') return C_GREEN;
+  return C_RED;
+};
+
+const getReturnStatusFill = (status: string) => {
+  if (status === 'pending') return C_AMBER;
+  if (status === 'reviewing') return C_BLUE;
+  if (status === 'approved') return C_GREEN;
+  if (status === 'rejected') return C_RED;
+  return '#94a3b8';
+};
+
+const getBasketPairStrength = (lift: number) => {
+  if (lift >= 3) return { label: 'Very Strong', color: 'bg-green-500' };
+  if (lift >= 2) return { label: 'Strong', color: 'bg-blue-500' };
+  return { label: 'Moderate', color: 'bg-amber-400' };
+};
+
+const getAxisFontSize = (viewType: ViewType) => (viewType === 'month' ? 10 : 11);
+const getAxisInterval = (viewType: ViewType) => (viewType === 'month' ? 4 : 0);
+const getOrderCountLabel = (count: number) => (count === 1 ? 'order' : 'orders');
+const getTimeCountLabel = (count: number) => (count === 1 ? 'time' : 'times');
+
+function DashboardLoading() {
+  return (
+    <div className="flex items-center justify-center h-60">
+      <Loader2 className="w-7 h-7 animate-spin text-blue-400" />
+    </div>
+  );
+}
+
+function AttentionBanner({ needsAttention, orderStats }: { needsAttention: number; orderStats: OrderStats | null }) {
+  if (needsAttention <= 0) return null;
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-3.5 flex items-center gap-3">
+      <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+      <p className="text-sm font-medium text-amber-800">
+        <span className="font-bold">{orderStats?.pendingOrders ?? 0} pending orders</span>
+        {(orderStats?.pendingReturns ?? 0) > 0 && <> and <span className="font-bold">{orderStats!.pendingReturns} return requests</span></>}
+        {' '}need your attention.
+      </p>
+      <Link href="/admin/orders" className="ml-auto text-xs font-bold text-amber-600 hover:text-amber-800 flex items-center gap-1 shrink-0 transition-colors">
+        Review <ArrowRight className="w-3 h-3" />
+      </Link>
+    </div>
+  );
+}
+
+function RecentOrdersSection({ recent, returns }: { recent: Order[]; returns: ReturnReq[] }) {
+  return (
+    <div className="grid lg:grid-cols-2 gap-4">
+      <SectionCard title="Recent Orders" href="/admin/orders">
+        {recent.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-slate-300">
+            <Package className="w-7 h-7 mb-2" /><p className="text-xs">No orders yet</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-50">
+            {recent.map(o => (
+              <div key={o.id} className="flex items-center gap-3 px-5 py-3.5">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-slate-800">{o.receiptNumber ?? o.id.slice(0, 8)}</p>
+                  <p className="text-xs text-slate-400 truncate">{o.shippingAddress}</p>
+                </div>
+                <div className="text-right shrink-0 hidden sm:block">
+                  <p className="text-sm font-semibold text-slate-800">{fmt2(o.total)}</p>
+                  <p className="text-[10px] text-slate-400">{timeAgo(o.date)}</p>
+                </div>
+                <StatusBadge status={o.status} />
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Pending Returns" href="/admin/returns" linkLabel="Manage">
+        {returns.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-slate-300">
+            <CheckCircle2 className="w-7 h-7 mb-2" /><p className="text-xs">No pending returns</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-50">
+            {returns.map(r => (
+              <div key={r.id} className="flex items-center gap-3 px-5 py-3.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
+                  <RotateCcw className="w-3.5 h-3.5 text-amber-500" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-slate-800">{r.receipt_number}</p>
+                  <p className="text-xs text-slate-400 truncate">{r.reason}</p>
+                </div>
+                <p className="text-[10px] text-slate-400 shrink-0">{timeAgo(r.created_at)}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
+function AnalyticsControls({
+  viewType,
+  year,
+  month,
+  compareYear,
+  periodLabel,
+  setViewType,
+  setYear,
+  setMonth,
+  setCompareYear,
+}: {
+  viewType: ViewType;
+  year: number;
+  month: number;
+  compareYear: number;
+  periodLabel: string;
+  setViewType: React.Dispatch<React.SetStateAction<ViewType>>;
+  setYear: React.Dispatch<React.SetStateAction<number>>;
+  setMonth: React.Dispatch<React.SetStateAction<number>>;
+  setCompareYear: React.Dispatch<React.SetStateAction<number>>;
+}) {
+  return (
+    <div className="bg-white border border-slate-100 shadow-sm rounded-2xl p-4 flex flex-wrap items-center gap-5 mb-4">
+      <div>
+        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">View Type</p>
+        <div className="flex gap-1.5">
+          {([
+            { key: 'overall', label: 'Overall' },
+            { key: 'month',   label: 'Month'   },
+            { key: 'year',    label: 'Year'    },
+            { key: 'compare', label: 'Compare' },
+          ] as { key: ViewType; label: string }[]).map(({ key, label }) => (
+            <button key={key} onClick={() => setViewType(key)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all border ${
+                viewType === key
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-100'
+                  : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300 hover:text-slate-700'
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {viewType !== 'overall' && (
+        <div>
+          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+            {viewType === 'compare' ? 'Year A' : 'Year'}
+          </p>
+          <select value={year} onChange={e => setYear(Number(e.target.value))}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-blue-400">
+            {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+      )}
+
+      {viewType === 'month' && (
+        <div>
+          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Month</p>
+          <select value={month} onChange={e => setMonth(Number(e.target.value))}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-blue-400">
+            {MONTHS_LONG.map((m, i) => <option key={m} value={i}>{m}</option>)}
+          </select>
+        </div>
+      )}
+
+      {viewType === 'compare' && (
+        <div>
+          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Year B</p>
+          <select value={compareYear} onChange={e => setCompareYear(Number(e.target.value))}
+            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-blue-400">
+            {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+      )}
+
+      <div className="ml-auto text-right">
+        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Showing</p>
+        <p className="text-sm font-bold text-blue-600">{periodLabel}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const [allOrders,  setAllOrders]  = useState<Order[]>([]);
   const [recent,     setRecent]     = useState<Order[]>([]);
@@ -615,7 +804,7 @@ export default function AdminDashboard() {
     for (const o of filtered) c[o.status] = (c[o.status] ?? 0) + 1;
     return Object.entries(c).map(([name, value]) => ({
       name, value,
-      fill: name==='Processing' ? C_BLUE : name==='In Transit' ? C_AMBER : name==='Delivered' ? C_GREEN : C_RED,
+      fill: getStatusFill(name),
     }));
   }, [filtered]);
 
@@ -660,30 +849,14 @@ export default function AdminDashboard() {
   const topBasketPair = basketAnalysis.rows[0];
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-60">
-        <Loader2 className="w-7 h-7 animate-spin text-blue-400" />
-      </div>
-    );
+    return <DashboardLoading />;
   }
 
   return (
     <div className="space-y-6">
 
       {/* ── Attention banner ──────────────────────────────────────────────────── */}
-      {needsAttention > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-3.5 flex items-center gap-3">
-          <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
-          <p className="text-sm font-medium text-amber-800">
-            <span className="font-bold">{orderStats?.pendingOrders ?? 0} pending orders</span>
-            {(orderStats?.pendingReturns ?? 0) > 0 && <> and <span className="font-bold">{orderStats!.pendingReturns} return requests</span></>}
-            {' '}need your attention.
-          </p>
-          <Link href="/admin/orders" className="ml-auto text-xs font-bold text-amber-600 hover:text-amber-800 flex items-center gap-1 shrink-0 transition-colors">
-            Review <ArrowRight className="w-3 h-3" />
-          </Link>
-        </div>
-      )}
+      <AttentionBanner needsAttention={needsAttention} orderStats={orderStats} />
 
       {/* ── Today snapshot ────────────────────────────────────────────────────── */}
       <div>
@@ -723,123 +896,22 @@ export default function AdminDashboard() {
       </div>
 
       {/* ── Recent orders + pending returns ───────────────────────────────────── */}
-      <div className="grid lg:grid-cols-2 gap-4">
-        <SectionCard title="Recent Orders" href="/admin/orders">
-          {recent.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-slate-300">
-              <Package className="w-7 h-7 mb-2" /><p className="text-xs">No orders yet</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-50">
-              {recent.map(o => (
-                <div key={o.id} className="flex items-center gap-3 px-5 py-3.5">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-slate-800">{o.receiptNumber ?? o.id.slice(0, 8)}</p>
-                    <p className="text-xs text-slate-400 truncate">{o.shippingAddress}</p>
-                  </div>
-                  <div className="text-right shrink-0 hidden sm:block">
-                    <p className="text-sm font-semibold text-slate-800">{fmt2(o.total)}</p>
-                    <p className="text-[10px] text-slate-400">{timeAgo(o.date)}</p>
-                  </div>
-                  <StatusBadge status={o.status} />
-                </div>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-
-        <SectionCard title="Pending Returns" href="/admin/returns" linkLabel="Manage">
-          {returns.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-slate-300">
-              <CheckCircle2 className="w-7 h-7 mb-2" /><p className="text-xs">No pending returns</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-50">
-              {returns.map(r => (
-                <div key={r.id} className="flex items-center gap-3 px-5 py-3.5">
-                  <div className="w-8 h-8 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
-                    <RotateCcw className="w-3.5 h-3.5 text-amber-500" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-slate-800">{r.receipt_number}</p>
-                    <p className="text-xs text-slate-400 truncate">{r.reason}</p>
-                  </div>
-                  <p className="text-[10px] text-slate-400 shrink-0">{timeAgo(r.created_at)}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-      </div>
+      <RecentOrdersSection recent={recent} returns={returns} />
 
       {/* ════════ ANALYTICS ════════════════════════════════════════════════════ */}
       <div className="pt-1">
         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Analytics & Insights</p>
-
-        {/* Date filter */}
-        <div className="bg-white border border-slate-100 shadow-sm rounded-2xl p-4 flex flex-wrap items-center gap-5 mb-4">
-          {/* View Type buttons */}
-          <div>
-            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">View Type</p>
-            <div className="flex gap-1.5">
-              {([
-                { key: 'overall', label: 'Overall' },
-                { key: 'month',   label: 'Month'   },
-                { key: 'year',    label: 'Year'    },
-                { key: 'compare', label: 'Compare' },
-              ] as { key: ViewType; label: string }[]).map(({ key, label }) => (
-                <button key={key} onClick={() => setViewType(key)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all border ${
-                    viewType === key
-                      ? 'bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-100'
-                      : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300 hover:text-slate-700'
-                  }`}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Year selector — hidden in Overall */}
-          {viewType !== 'overall' && (
-            <div>
-              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
-                {viewType === 'compare' ? 'Year A' : 'Year'}
-              </p>
-              <select value={year} onChange={e => setYear(Number(e.target.value))}
-                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-blue-400">
-                {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
-            </div>
-          )}
-
-          {/* Month selector — only in month view */}
-          {viewType === 'month' && (
-            <div>
-              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Month</p>
-              <select value={month} onChange={e => setMonth(Number(e.target.value))}
-                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-blue-400">
-                {MONTHS_LONG.map((m, i) => <option key={m} value={i}>{m}</option>)}
-              </select>
-            </div>
-          )}
-
-          {/* Year B — only in compare */}
-          {viewType === 'compare' && (
-            <div>
-              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Year B</p>
-              <select value={compareYear} onChange={e => setCompareYear(Number(e.target.value))}
-                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 focus:outline-none focus:border-blue-400">
-                {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
-            </div>
-          )}
-
-          <div className="ml-auto text-right">
-            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Showing</p>
-            <p className="text-sm font-bold text-blue-600">{periodLabel}</p>
-          </div>
-        </div>
+        <AnalyticsControls
+          viewType={viewType}
+          year={year}
+          month={month}
+          compareYear={compareYear}
+          periodLabel={periodLabel}
+          setViewType={setViewType}
+          setYear={setYear}
+          setMonth={setMonth}
+          setCompareYear={setCompareYear}
+        />
 
         {/* Period KPIs */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
@@ -872,7 +944,7 @@ export default function AdminDashboard() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
+                  <XAxis dataKey="label" tick={{ fontSize: getAxisFontSize(viewType), fill: '#94a3b8' }} interval={getAxisInterval(viewType)} />
                   <YAxis tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <Tooltip {...TT} formatter={(v: unknown) => [fmt(asNumber(v)), 'Revenue']} />
                   <Area type="monotone" dataKey="revenue" stroke={C_BLUE} strokeWidth={2} fill="url(#rg)" dot={false} activeDot={{ r: 4, fill: C_BLUE }} />
@@ -896,7 +968,7 @@ export default function AdminDashboard() {
               ) : (
                 <BarChart data={timeSeries} margin={{ top: 4, right: 8, left: -10, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
+                  <XAxis dataKey="label" tick={{ fontSize: getAxisFontSize(viewType), fill: '#94a3b8' }} interval={getAxisInterval(viewType)} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <Tooltip {...TT} formatter={(v: unknown) => [String(v), 'Orders']} />
                   <Bar dataKey="orders" fill={C_INDIGO} radius={[4, 4, 0, 0]}>
@@ -1005,7 +1077,7 @@ export default function AdminDashboard() {
                   </p>
                   {topBasketPair && (
                     <span className="shrink-0 rounded-full bg-green-50 px-2.5 py-1 text-[10px] font-bold text-green-700">
-                      🏆 Top pair: {topBasketPair.count} {topBasketPair.count === 1 ? 'order' : 'orders'}
+                      🏆 Top pair: {topBasketPair.count} {getOrderCountLabel(topBasketPair.count)}
                     </span>
                   )}
                 </div>
@@ -1038,9 +1110,7 @@ export default function AdminDashboard() {
             {basketAnalysis.rows.length === 0 ? <EmptyChart label="No strong product pairings found yet" /> : (
               <div className="max-h-[340px] space-y-3 overflow-y-auto pr-1 pt-1">
                 {basketAnalysis.rows.slice(0, 6).map((row, i) => {
-                  const strength = row.lift >= 3 ? { label: 'Very Strong', color: 'bg-green-500' }
-                                 : row.lift >= 2 ? { label: 'Strong',      color: 'bg-blue-500'  }
-                                 :                 { label: 'Moderate',    color: 'bg-amber-400' };
+                  const strength = getBasketPairStrength(row.lift);
                   return (
                     <div key={`${row.left}-${row.right}-${i}`} className="rounded-xl border border-slate-100 bg-white px-4 py-3 shadow-sm">
                       {/* Product names */}
@@ -1060,7 +1130,7 @@ export default function AdminDashboard() {
                       <div className="space-y-1.5 text-[11px]">
                         <div className="flex items-center justify-between text-slate-600">
                           <span>🛒 Bought together</span>
-                          <span className="font-bold text-slate-900">{row.count} {row.count === 1 ? 'time' : 'times'} ({row.support}% of orders)</span>
+                          <span className="font-bold text-slate-900">{row.count} {getTimeCountLabel(row.count)} ({row.support}% of orders)</span>
                         </div>
                         <div className="flex items-center justify-between text-slate-600">
                           <span>👥 Buyers who add both</span>
@@ -1087,12 +1157,7 @@ export default function AdminDashboard() {
                 <PieChart>
                   <Pie data={returnStatusData} cx="50%" cy="50%" innerRadius={50} outerRadius={76} paddingAngle={3} dataKey="value">
                     {returnStatusData.map((e, i) => (
-                      <Cell key={i} fill={
-                        e.name === 'pending'   ? C_AMBER :
-                        e.name === 'reviewing' ? C_BLUE  :
-                        e.name === 'approved'  ? C_GREEN :
-                        e.name === 'rejected'  ? C_RED   : '#94a3b8'
-                      } />
+                      <Cell key={i} fill={getReturnStatusFill(e.name)} />
                     ))}
                   </Pie>
                   <Tooltip {...TT} />

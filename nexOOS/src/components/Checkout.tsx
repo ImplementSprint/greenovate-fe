@@ -214,6 +214,61 @@ const getCheckoutPaymentMethods = (deliveryMethod: DeliveryMethod) => [
   { id: 'maya', name: 'Maya', desc: 'Pay via Maya', icon: <Wallet className="w-5 h-5 text-blue-600" /> },
 ];
 
+const getEffectiveCart = (cart: Order['items'], checkoutItemIds: string[] | null) =>
+  checkoutItemIds
+    ? cart.filter((item) => checkoutItemIds.includes(item.id))
+    : cart;
+
+const getDeliveryFee = (
+  deliveryMethod: DeliveryMethod,
+  effectiveCartTotal: number,
+  estimateFee: number | undefined,
+  freeDeliveryMin: number,
+  defaultDeliveryFee: number,
+) => {
+  if (deliveryMethod === 'claim_at_branch') {
+    return 0;
+  }
+
+  return effectiveCartTotal >= freeDeliveryMin ? 0 : estimateFee ?? defaultDeliveryFee;
+};
+
+const getSavedAddressInstruction = (deliveryMethod: DeliveryMethod, savedAddressPrompt: string) =>
+  deliveryMethod === 'claim_at_branch'
+    ? 'Pickup is free. You can still save an address for contact details and future deliveries.'
+    : savedAddressPrompt;
+
+const getEstimateLoadingCopy = (deliveryMethod: DeliveryMethod) =>
+  deliveryMethod === 'claim_at_branch'
+    ? 'Preparing free pickup details...'
+    : 'Checking delivery fee for this address...';
+
+const getCheckoutDestinationTitle = (deliveryMethod: DeliveryMethod) =>
+  deliveryMethod === 'claim_at_branch' ? 'Pickup Contact' : 'Shipping To';
+
+const getCheckoutDestinationLine = (
+  deliveryMethod: DeliveryMethod,
+  selectedBranch: { name: string; address: string } | null | undefined,
+  shippingInfo: Parameters<typeof formatDeliveryAddress>[0],
+) =>
+  deliveryMethod === 'claim_at_branch' && selectedBranch
+    ? `${selectedBranch.name}, ${selectedBranch.address}`
+    : formatDeliveryAddress(shippingInfo);
+
+const getDeliverySummaryCopy = (
+  deliveryMethod: DeliveryMethod,
+  selectedBranch: { name: string } | null | undefined,
+  etaLabel?: string,
+) => {
+  if (deliveryMethod === 'claim_at_branch') {
+    return selectedBranch
+      ? `Pickup branch: ${selectedBranch.name}`
+      : 'Preparing pickup details';
+  }
+
+  return `Delivering from ${selectedBranch?.name ?? 'selected branch'}. Estimated time: ${etaLabel || 'Waiting for address'}`;
+};
+
 const getPlaceOrderButtonLabel = (isPlacingOrder: boolean, isOnlinePayment: boolean, orderTotal: number) => {
   if (isPlacingOrder) {
     return isOnlinePayment ? 'Redirecting to payment…' : 'Placing Order…';
@@ -240,9 +295,7 @@ export default function Checkout() {
   } = useAppContext();
 
   // Derive live from cart so quantity changes and removals reflect immediately
-  const effectiveCart = checkoutItemIds
-    ? cart.filter(i => checkoutItemIds.includes(i.id))
-    : cart;
+  const effectiveCart = getEffectiveCart(cart, checkoutItemIds);
   const effectiveCartTotal = effectiveCart.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
   const [checkoutStep, setCheckoutStep] = useState(1);
@@ -298,8 +351,13 @@ export default function Checkout() {
   const { settings: oosSettings } = useOosSettings();
   const MIN_ORDER_AMOUNT = oosSettings.min_order_amount;
   const isFreeDelivery = deliveryMethod !== 'claim_at_branch' && effectiveCartTotal >= oosSettings.free_delivery_min;
-  const baseDeliveryFee = isFreeDelivery ? 0 : (deliveryEstimate?.fee ?? oosSettings.delivery_fee);
-  const deliveryFee = deliveryMethod === 'claim_at_branch' ? 0 : baseDeliveryFee;
+  const deliveryFee = getDeliveryFee(
+    deliveryMethod,
+    effectiveCartTotal,
+    deliveryEstimate?.fee,
+    oosSettings.free_delivery_min,
+    oosSettings.delivery_fee,
+  );
   const discountAmount = appliedPromo?.discountAmount ?? 0;
   const orderTotal = Math.max(0, effectiveCartTotal + deliveryFee - discountAmount);
   const isBelowMinOrder = effectiveCartTotal < MIN_ORDER_AMOUNT;
@@ -964,9 +1022,7 @@ export default function Checkout() {
                       <div>
                         <p className="text-sm font-black uppercase tracking-[0.22em] text-slate-400">Saved Addresses</p>
                         <p className="mt-1 text-sm text-slate-500">
-                          {deliveryMethod === 'claim_at_branch'
-                            ? 'Pickup is free. You can still save an address for contact details and future deliveries.'
-                            : savedAddressPrompt}
+                          {getSavedAddressInstruction(deliveryMethod, savedAddressPrompt)}
                         </p>
                       </div>
                       <button
@@ -1021,9 +1077,7 @@ export default function Checkout() {
                   )}
                   {deliveryEstimateStatus === 'loading' && (
                     <p className="mt-4 text-sm font-bold text-slate-500">
-                      {deliveryMethod === 'claim_at_branch'
-                        ? 'Preparing free pickup details...'
-                        : 'Checking delivery fee for this address...'}
+                      {getEstimateLoadingCopy(deliveryMethod)}
                     </p>
                   )}
                   {deliveryEstimateStatus === 'ready' && deliveryEstimate && (
@@ -1598,14 +1652,12 @@ export default function Checkout() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                       <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
                         <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-4">
-                          {deliveryMethod === 'claim_at_branch' ? 'Pickup Contact' : 'Shipping To'}
+                          {getCheckoutDestinationTitle(deliveryMethod)}
                         </h3>
                         <p className="font-black text-slate-900 mb-1">{shippingInfo.fullName}</p>
                         <p className="text-sm text-slate-600 mb-1">{shippingInfo.phone}</p>
                         <p className="text-sm text-slate-600 leading-relaxed">
-                          {deliveryMethod === 'claim_at_branch' && selectedBranch
-                            ? `${selectedBranch.name}, ${selectedBranch.address}`
-                            : formatDeliveryAddress(shippingInfo) || 'Address will be confirmed during checkout.'}
+                          {getCheckoutDestinationLine(deliveryMethod, selectedBranch, shippingInfo) || 'Address will be confirmed during checkout.'}
                         </p>
                       </div>
                       <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
@@ -1785,9 +1837,7 @@ export default function Checkout() {
                   <div className="flex items-center gap-3 text-xs text-slate-500 bg-blue-50 p-4 rounded-2xl">
                     <Truck className="w-5 h-5 text-blue-600 shrink-0" />
                     <p className="font-medium leading-relaxed">
-                      {deliveryMethod === 'claim_at_branch'
-                        ? <>Pickup branch: <span className="font-black text-blue-700">{selectedBranch.name}</span>. <span className="font-black text-blue-700">{deliveryEstimate?.etaLabel || 'Preparing pickup details'}</span>.</>
-                        : <>Delivering from <span className="font-black text-blue-700">{selectedBranch.name}</span>. Estimated time: <span className="font-black text-blue-700">{deliveryEstimate?.etaLabel || 'Waiting for address'}</span>.</>}
+                      {getDeliverySummaryCopy(deliveryMethod, selectedBranch, deliveryEstimate?.etaLabel)}
                     </p>
                   </div>
                 )}
