@@ -214,12 +214,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     const email = (payload?.email as string) ?? '';
     const rawRole = (payload?.staffRole as string) ?? 'staff';
     const role: 'super_admin' | 'admin' | 'staff' = rawRole === 'super_admin' ? 'super_admin' : rawRole === 'admin' ? 'admin' : 'staff';
-    setAdminEmail(email);
     const storedName = getAdminDisplayName();
     const jwtFullName = (payload?.fullName as string) ?? '';
-    setAdminName(storedName || jwtFullName || formatName(email));
-    setStaffRole(role);
-    setChecked(true);
+    queueMicrotask(() => {
+      setAdminEmail(email);
+      setAdminName(storedName || jwtFullName || formatName(email));
+      setStaffRole(role);
+      setChecked(true);
+    });
 
     // Fetch notification data (reuse token already declared above)
     {

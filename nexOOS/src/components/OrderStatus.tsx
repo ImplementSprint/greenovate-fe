@@ -70,6 +70,17 @@ function EmptyOrderState({ onBack }: { onBack: () => void }) {
   );
 }
 
+const applyTrackedOrderStatus = (
+  order: Order,
+  newStatus: Order['status'],
+  setOrders: React.Dispatch<React.SetStateAction<Order[]>>,
+  setSelectedOrder: (order: Order | null) => void,
+) => {
+  const updatedOrder = { ...order, status: newStatus };
+  setOrders((prev) => prev.map((item) => (item.id === order.id ? updatedOrder : item)));
+  setSelectedOrder(updatedOrder);
+};
+
 export default function OrderStatus() {
   const { selectedOrder, setView, setOrders, setSelectedOrder } = useAppContext();
   const delayRef = useRef(30_000);
@@ -143,12 +154,7 @@ export default function OrderStatus() {
 
     delayRef.current = TRACKING_POLL_DELAY_MS;
     let timeoutId: ReturnType<typeof setTimeout>;
-    const { id, receiptNumber, status } = selectedOrder;
-
-    const applyStatusUpdate = (newStatus: Order['status']) => {
-      setOrders((prev) => prev.map((o) => o.id === id ? { ...o, status: newStatus } : o));
-      setSelectedOrder({ ...selectedOrder, status: newStatus });
-    };
+    const { receiptNumber, status } = selectedOrder;
 
     const poll = async () => {
       let didFail = false;
@@ -159,7 +165,7 @@ export default function OrderStatus() {
           const data = await res.json();
           if (typeof data.status === 'string' && data.status !== status) {
             const nextStatus = data.status as Order['status'];
-            applyStatusUpdate(nextStatus);
+            applyTrackedOrderStatus(selectedOrder, nextStatus, setOrders, setSelectedOrder);
           }
         }
       } catch {

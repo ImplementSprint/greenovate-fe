@@ -1,35 +1,35 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { XCircle, RotateCcw, ShoppingBag, Loader2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth-client';
 
 type CancelState = 'cancelling' | 'done' | 'error';
 
 export default function PaymentCancelPage() {
-  const [receipt, setReceipt] = useState('');
-  const [cancelState, setCancelState] = useState<CancelState | null>(null);
+  const [receipt] = useState(() => (
+    typeof window === 'undefined'
+      ? ''
+      : new URLSearchParams(window.location.search).get('receipt') ?? ''
+  ));
+  const [cancelState, setCancelState] = useState<CancelState | null>(() => (receipt ? 'cancelling' : null));
 
   // Auto-cancel the order as soon as the page loads with a receipt number.
   // This fires when the user is redirected here by PayMongo (payment not completed)
   // OR when they hit the browser back button from the PayMongo checkout page.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const receiptParam = params.get('receipt') ?? '';
-    setReceipt(receiptParam);
-
-    if (!receiptParam) return;
+    if (!receipt) return;
 
     // Start cancelling immediately — no button click required
-    setCancelState('cancelling');
     fetchWithAuth('/api/orders/payment/cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ receiptNumber: receiptParam }),
+      body: JSON.stringify({ receiptNumber: receipt }),
     })
       .then((res) => setCancelState(res.ok ? 'done' : 'error'))
       .catch(() => setCancelState('error'));
-  }, []);
+  }, [receipt]);
 
   return (
     <main className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
@@ -71,22 +71,22 @@ export default function PaymentCancelPage() {
         )}
 
         <div className="space-y-3">
-          <a
+          <Link
             href="/"
             className="flex items-center justify-center gap-2 w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-sm hover:bg-blue-700 transition-colors shadow-lg shadow-blue-100"
           >
             <RotateCcw className="w-4 h-4" />
             Try Again
-          </a>
+          </Link>
 
           {(cancelState === 'done' || cancelState === 'error') && (
-            <a
+            <Link
               href="/"
               className="flex items-center justify-center gap-2 w-full py-4 bg-white border border-slate-200 text-slate-600 rounded-2xl font-black text-sm hover:bg-slate-50 transition-colors"
             >
               <ShoppingBag className="w-4 h-4" />
               Go to Shop
-            </a>
+            </Link>
           )}
         </div>
 

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { CheckCircle2, XCircle, Loader2, ShoppingBag } from 'lucide-react';
 
 type PaymentStatus = 'polling' | 'paid' | 'failed';
@@ -17,19 +18,16 @@ const MAX_POLLS = 10;
 const POLL_INTERVAL_MS = 2500;
 
 export default function PaymentSuccessPage() {
-  const [status, setStatus] = useState<PaymentStatus>('polling');
   const [order, setOrder] = useState<OrderDetail>({});
-  const [receipt, setReceipt] = useState('');
+  const [receipt] = useState(() => (
+    typeof window === 'undefined'
+      ? ''
+      : new URLSearchParams(window.location.search).get('receipt') ?? ''
+  ));
+  const [status, setStatus] = useState<PaymentStatus>(() => (receipt ? 'polling' : 'failed'));
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const receiptParam = params.get('receipt') ?? '';
-    setReceipt(receiptParam);
-
-    if (!receiptParam) {
-      setStatus('failed');
-      return;
-    }
+    if (!receipt) return;
 
     let polls = 0;
     let cancelled = false;
@@ -38,7 +36,7 @@ export default function PaymentSuccessPage() {
       if (cancelled) return;
 
       try {
-        const res = await fetch(`/api/payment/status?receipt=${encodeURIComponent(receiptParam)}`);
+        const res = await fetch(`/api/payment/status?receipt=${encodeURIComponent(receipt)}`);
         const data = await res.json();
 
         if (cancelled) return;
@@ -75,7 +73,7 @@ export default function PaymentSuccessPage() {
     poll();
 
     return () => { cancelled = true; };
-  }, []);
+  }, [receipt]);
 
   return (
     <main className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
@@ -132,13 +130,13 @@ export default function PaymentSuccessPage() {
               )}
             </div>
 
-            <a
+            <Link
               href="/"
               className="flex items-center justify-center gap-2 w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-sm hover:bg-blue-700 transition-colors shadow-lg shadow-blue-100"
             >
               <ShoppingBag className="w-4 h-4" />
               View My Orders
-            </a>
+            </Link>
           </>
         )}
 
@@ -153,12 +151,12 @@ export default function PaymentSuccessPage() {
               {receipt ? ` for order ${receipt}` : ''}.
               If you were charged, please contact support with your receipt number.
             </p>
-            <a
+            <Link
               href="/"
               className="flex items-center justify-center gap-2 w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm hover:bg-slate-700 transition-colors"
             >
               Return to Shop
-            </a>
+            </Link>
           </>
         )}
 
