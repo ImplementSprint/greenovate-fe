@@ -202,6 +202,28 @@ const getDeliveryMethodCopy = (method: DeliveryMethod) => {
   };
 };
 
+const getCheckoutPaymentMethods = (deliveryMethod: DeliveryMethod) => [
+  { id: 'card', name: 'Credit / Debit Card', desc: 'Pay securely with card', icon: <CreditCard className="w-5 h-5 text-slate-500" /> },
+  {
+    id: 'cod',
+    name: deliveryMethod === 'claim_at_branch' ? 'Cash' : 'Cash on Delivery',
+    desc: deliveryMethod === 'claim_at_branch' ? 'Pay at the branch' : 'Pay when you receive',
+    icon: <Banknote className="w-5 h-5 text-slate-500" />,
+  },
+  { id: 'gcash', name: 'GCash', desc: 'Pay via GCash', icon: <Wallet className="w-5 h-5 text-blue-600" /> },
+  { id: 'maya', name: 'Maya', desc: 'Pay via Maya', icon: <Wallet className="w-5 h-5 text-blue-600" /> },
+];
+
+const getPlaceOrderButtonLabel = (isPlacingOrder: boolean, isOnlinePayment: boolean, orderTotal: number) => {
+  if (isPlacingOrder) {
+    return isOnlinePayment ? 'Redirecting to payment…' : 'Placing Order…';
+  }
+
+  return isOnlinePayment
+    ? `Pay ₱${orderTotal.toFixed(2)} Online`
+    : `Place Order (₱${orderTotal.toFixed(2)})`;
+};
+
 export default function Checkout() {
   const {
     cart, setCart,
@@ -290,6 +312,7 @@ export default function Checkout() {
   const savedAddressCountMessage = getSavedAddressCountMessage(savedAddresses.length);
   const promoInputClassName = getPromoInputClassName(promoStatus);
   const paymentMethodLabel = getPaymentMethodLabel(paymentMethod, deliveryMethod);
+  const paymentMethods = getCheckoutPaymentMethods(deliveryMethod);
 
   const applySavedAddress = React.useCallback((address: SavedAddress) => {
     setShippingInfo({
@@ -1490,12 +1513,7 @@ export default function Checkout() {
                   </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                    {[
-                      { id: 'card', name: 'Credit / Debit Card', desc: 'Pay securely with card', icon: <CreditCard className="w-5 h-5 text-slate-500" /> },
-                      { id: 'cod', name: deliveryMethod === 'claim_at_branch' ? 'Cash' : 'Cash on Delivery', desc: deliveryMethod === 'claim_at_branch' ? 'Pay at the branch' : 'Pay when you receive', icon: <Banknote className="w-5 h-5 text-slate-500" /> },
-                      { id: 'gcash', name: 'GCash', desc: 'Pay via GCash', icon: <Wallet className="w-5 h-5 text-blue-600" /> },
-                      { id: 'maya', name: 'Maya', desc: 'Pay via Maya', icon: <Wallet className="w-5 h-5 text-blue-600" /> }
-                    ].map(method => (
+                    {paymentMethods.map(method => (
                       <button
                         type="button"
                         key={method.id}
@@ -1670,11 +1688,7 @@ export default function Checkout() {
                       disabled={isPlacingOrder || isBelowMinOrder || isAboveMaxItems}
                       className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-black text-lg hover:bg-blue-700 transition-all shadow-xl shadow-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      {isPlacingOrder
-                        ? (isOnlinePayment ? 'Redirecting to payment…' : 'Placing Order…')
-                        : isOnlinePayment
-                          ? `Pay ₱${orderTotal.toFixed(2)} Online`
-                          : `Place Order (₱${orderTotal.toFixed(2)})`}
+                      {getPlaceOrderButtonLabel(isPlacingOrder, isOnlinePayment, orderTotal)}
                     </button>
                   </div>
                 </motion.div>

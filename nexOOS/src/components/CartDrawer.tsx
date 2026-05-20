@@ -6,6 +6,22 @@ import { ShoppingCart, X, Minus, Plus } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
+const syncSelectedCartIds = (
+  cartIds: Set<string>,
+  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>,
+) => {
+  setSelectedIds((prev) => {
+    const next = new Set<string>();
+    for (const id of prev) {
+      if (cartIds.has(id)) next.add(id);
+    }
+    for (const id of cartIds) {
+      if (!prev.has(id)) next.add(id);
+    }
+    return next;
+  });
+};
+
 export default function CartDrawer() {
   const {
     isLoggedIn,
@@ -21,19 +37,7 @@ export default function CartDrawer() {
 
   // Keep selectedIds in sync: add new items, remove deleted ones
   useEffect(() => {
-    setSelectedIds(prev => {
-      const cartIds = new Set(cart.map(i => i.id));
-      const next = new Set<string>();
-      // Keep existing selections that are still in cart
-      for (const id of prev) {
-        if (cartIds.has(id)) next.add(id);
-      }
-      // Auto-select newly added items
-      for (const id of cartIds) {
-        if (!prev.has(id)) next.add(id);
-      }
-      return next;
-    });
+    syncSelectedCartIds(new Set(cart.map(i => i.id)), setSelectedIds);
   }, [cart]);
 
   useBodyScrollLock(isCartOpen || isClearCartModalOpen);

@@ -113,6 +113,19 @@ function AdminProfileCard({ profile, initials, fields }: { profile: AdminProfile
   );
 }
 
+function PasswordMatchStatus({ newPw, confirmPw }: { newPw: string; confirmPw: string }) {
+  if (!confirmPw || !newPw) return null;
+
+  const matches = newPw === confirmPw;
+  return (
+    <p className={`text-xs font-bold flex items-center gap-1.5 ${matches ? 'text-green-600' : 'text-red-500'}`}>
+      {matches
+        ? <><CheckCircle2 className="w-3.5 h-3.5" /> Passwords match</>
+        : <><AlertCircle className="w-3.5 h-3.5" /> Passwords do not match</>}
+    </p>
+  );
+}
+
 export default function AdminProfilePage() {
   const [profile,    setProfile]    = useState<AdminProfile | null>(null);
   const [loading,    setLoading]    = useState(true);
@@ -347,13 +360,7 @@ export default function AdminProfilePage() {
                 </div>
 
                 {/* Match indicator */}
-                {confirmPw && newPw && (
-                  <p className={`text-xs font-bold flex items-center gap-1.5 ${newPw === confirmPw ? 'text-green-600' : 'text-red-500'}`}>
-                    {newPw === confirmPw
-                      ? <><CheckCircle2 className="w-3.5 h-3.5" /> Passwords match</>
-                      : <><AlertCircle className="w-3.5 h-3.5" /> Passwords do not match</>}
-                  </p>
-                )}
+                <PasswordMatchStatus newPw={newPw} confirmPw={confirmPw} />
               </div>
 
               <div className="flex items-center gap-3 mt-5 pt-5 border-t border-slate-100">

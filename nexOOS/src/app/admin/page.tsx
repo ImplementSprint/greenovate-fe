@@ -65,6 +65,7 @@ const TT = {
 // ─── Formatters ───────────────────────────────────────────────────────────────
 const fmt  = (v: number) => `₱${v.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 const fmt2 = (v: number) => `₱${v.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`;
+const asNumber = (value: unknown) => Number(value);
 
 function timeAgo(iso: string) {
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
@@ -120,14 +121,15 @@ function buildOverall(orders: Order[]) {
 }
 
 function buildCompare(orders: Order[], yA: number, yB: number) {
-  const rows = MONTHS_SHORT.map(m => ({ label: m, [yA]: 0, [yB]: 0 }));
+  const rows: Array<{ label: string } & Record<number, number>> =
+    MONTHS_SHORT.map(m => ({ label: m, [yA]: 0, [yB]: 0 }));
   for (const o of orders) {
     if (o.status === 'Cancelled') continue;
     const d = new Date(o.date);
     const yr = d.getFullYear();
-    if (yr === yA || yr === yB) (rows[d.getMonth()] as any)[yr] += o.total;
+    if (yr === yA || yr === yB) rows[d.getMonth()][yr] += o.total;
   }
-  return rows.map(r => ({ ...r, [yA]: Math.round((r as any)[yA]), [yB]: Math.round((r as any)[yB]) }));
+  return rows.map(r => ({ ...r, [yA]: Math.round(r[yA]), [yB]: Math.round(r[yB]) }));
 }
 
 function buildPayment(orders: Order[]) {
@@ -153,52 +155,98 @@ function buildCategory(orders: Order[], n = 6) {
 // Returns all frequent itemsets with their support counts.
 type FreqItemset = { items: string[]; support: number; count: number };
 
+function countFrequentItems(transactions: string[][]) {
+  const itemCounts = new Map<string, number>();
+
+  for (const tx of transactions) {
+    for (const item of new Set(tx)) {
+      itemCounts.set(item, (itemCounts.get(item) ?? 0) + 1);
+    }
+  }
+
+  return itemCounts;
+}
+
+function collectFrequentSingles(itemCounts: Map<string, number>, minCount: number, total: number) {
+  const currentLevel: string[][] = [];
+  const result: FreqItemset[] = [];
+
+  for (const [item, cnt] of itemCounts) {
+    if (cnt < minCount) continue;
+    currentLevel.push([item]);
+    result.push({ items: [item], support: cnt / total, count: cnt });
+  }
+
+  currentLevel.sort((a, b) => a[0].localeCompare(b[0]));
+  return { currentLevel, result };
+}
+
+function shareAprioriPrefix(left: string[], right: string[], length: number) {
+  for (let index = 0; index < length; index++) {
+    if (left[index] !== right[index]) return false;
+  }
+
+  return true;
+}
+
+function buildAprioriCandidates(currentLevel: string[][], itemsetSize: number) {
+  const candidates: string[][] = [];
+  const prefixLength = itemsetSize - 2;
+
+  for (let i = 0; i < currentLevel.length; i++) {
+    for (let j = i + 1; j < currentLevel.length; j++) {
+      const left = currentLevel[i];
+      const right = currentLevel[j];
+      if (shareAprioriPrefix(left, right, prefixLength) && left[prefixLength] < right[prefixLength]) {
+        candidates.push([...left, right[prefixLength]]);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function collectSupportedCandidates(
+  candidates: string[][],
+  minCount: number,
+  total: number,
+  countItemset: (items: string[]) => number,
+) {
+  const nextLevel: string[][] = [];
+  const result: FreqItemset[] = [];
+
+  for (const candidate of candidates) {
+    const cnt = countItemset(candidate);
+    if (cnt < minCount) continue;
+    nextLevel.push(candidate);
+    result.push({ items: candidate, support: cnt / total, count: cnt });
+  }
+
+  return { nextLevel, result };
+}
+
 function aprioriMine(transactions: string[][], minSupport: number, maxLen = 4): FreqItemset[] {
   const N = transactions.length;
   if (N === 0) return [];
   const minCount = Math.ceil(minSupport * N);
   const txSets = transactions.map(t => new Set(t));
-  const result: FreqItemset[] = [];
-
-  // Count how many transactions contain all items in the itemset
   const countItemset = (items: string[]) => txSets.filter(tx => items.every(i => tx.has(i))).length;
+  const initial = collectFrequentSingles(countFrequentItems(transactions), minCount, N);
 
   // ── Level 1: frequent single items ───────────────────────────────────────────
-  const itemCounts = new Map<string, number>();
-  for (const tx of transactions) for (const item of new Set(tx))
-    itemCounts.set(item, (itemCounts.get(item) ?? 0) + 1);
-
-  let currentLevel: string[][] = [];
-  for (const [item, cnt] of itemCounts) {
-    if (cnt >= minCount) {
-      currentLevel.push([item]);
-      result.push({ items: [item], support: cnt / N, count: cnt });
-    }
-  }
-  // Sort for consistent candidate generation (required by Apriori join step)
-  currentLevel.sort((a, b) => a[0].localeCompare(b[0]));
+  let currentLevel = initial.currentLevel;
+  const result = [...initial.result];
 
   // ── Levels k = 2..maxLen ─────────────────────────────────────────────────────
   for (let k = 2; k <= maxLen && currentLevel.length >= 2; k++) {
-    const candidates: string[][] = [];
-    // Join step: merge two (k-1)-itemsets that share the same (k-2) prefix
-    for (let i = 0; i < currentLevel.length; i++) {
-      for (let j = i + 1; j < currentLevel.length; j++) {
-        const a = currentLevel[i], b = currentLevel[j];
-        let match = true;
-        for (let x = 0; x < k - 2; x++) { if (a[x] !== b[x]) { match = false; break; } }
-        if (match && a[k - 2] < b[k - 2]) candidates.push([...a, b[k - 2]]);
-      }
-    }
-    const nextLevel: string[][] = [];
-    for (const c of candidates) {
-      const cnt = countItemset(c);
-      if (cnt >= minCount) {
-        nextLevel.push(c);
-        result.push({ items: c, support: cnt / N, count: cnt });
-      }
-    }
-    currentLevel = nextLevel;
+    const supported = collectSupportedCandidates(
+      buildAprioriCandidates(currentLevel, k),
+      minCount,
+      N,
+      countItemset,
+    );
+    currentLevel = supported.nextLevel;
+    result.push(...supported.result);
   }
   return result;
 }
@@ -503,21 +551,25 @@ export default function AdminDashboard() {
     [viewType, year, month, compareYear],
   );
 
-  const safe = (url: string, token: string): Promise<any> =>
-    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.ok ? r.json() : {})
-      .catch(() => ({}));
+  const safe = async <T,>(url: string, token: string): Promise<T> => {
+    try {
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      return response.ok ? await response.json() as T : {} as T;
+    } catch {
+      return {} as T;
+    }
+  };
 
   // Initial load — orders, stats, returns
   useEffect(() => {
     const token = getAccessToken();
     if (!token) return;
     Promise.all([
-      safe('/api/admin/stats', token),
-      safe('/api/admin/auth-stats', token),
-      safe('/api/admin/orders?limit=500', token),
-      safe('/api/admin/orders?limit=8', token),
-      safe('/api/admin/returns?limit=200', token),
+      safe<OrderStats>('/api/admin/stats', token),
+      safe<AuthStats>('/api/admin/auth-stats', token),
+      safe<{ data: Order[] }>('/api/admin/orders?limit=500', token),
+      safe<{ data: Order[] }>('/api/admin/orders?limit=8', token),
+      safe<{ data: ReturnReq[] }>('/api/admin/returns?limit=200', token),
     ]).then(([stats, aStats, allOrd, recOrd, ret]) => {
       if (stats?.totalOrders !== undefined) setOrderStats(stats);
       if (aStats?.totalCustomers !== undefined) setAuthStats(aStats);
@@ -536,8 +588,8 @@ export default function AdminDashboard() {
     if (dateRange?.to)   parts.push(`to=${encodeURIComponent(dateRange.to)}`);
     const qs = parts.join('&');
     Promise.all([
-      safe(`/api/admin/analytics?type=searches&${qs}`, token),
-      safe(`/api/admin/analytics?type=product-views&${qs}`, token),
+      safe<{ data: SearchRow[] }>(`/api/admin/analytics?type=searches&${qs}`, token),
+      safe<{ data: ViewRow[] }>(`/api/admin/analytics?type=product-views&${qs}`, token),
     ]).then(([srch, vw]) => {
       setSearches(srch?.data ?? []);
       setViews(vw?.data ?? []);
@@ -806,7 +858,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(v: any, n: any) => [fmt(v), n]} />
+                  <Tooltip {...TT} formatter={(v: unknown, n: unknown) => [fmt(asNumber(v)), String(n ?? '')]} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Line type="monotone" dataKey={String(year)}        stroke={C_BLUE}  strokeWidth={2.5} dot={{ r: 3, fill: C_BLUE }}  activeDot={{ r: 5 }} />
                   <Line type="monotone" dataKey={String(compareYear)} stroke={C_SLATE} strokeWidth={2}   dot={{ r: 3, fill: C_SLATE }} activeDot={{ r: 5 }} strokeDasharray="5 4" />
@@ -822,7 +874,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
                   <YAxis tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(v: any) => [fmt(v), 'Revenue']} />
+                  <Tooltip {...TT} formatter={(v: unknown) => [fmt(asNumber(v)), 'Revenue']} />
                   <Area type="monotone" dataKey="revenue" stroke={C_BLUE} strokeWidth={2} fill="url(#rg)" dot={false} activeDot={{ r: 4, fill: C_BLUE }} />
                 </AreaChart>
               )}
@@ -846,7 +898,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: viewType==='month' ? 10 : 11, fill: '#94a3b8' }} interval={viewType==='month' ? 4 : 0} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                  <Tooltip {...TT} formatter={(v: any) => [v, 'Orders']} />
+                  <Tooltip {...TT} formatter={(v: unknown) => [String(v), 'Orders']} />
                   <Bar dataKey="orders" fill={C_INDIGO} radius={[4, 4, 0, 0]}>
                     {(timeSeries as { label: string; orders?: number }[]).map((_, i) => (
                       <Cell key={i} fill={i % 2 === 0 ? C_INDIGO : '#818cf8'} />
@@ -893,7 +945,7 @@ export default function AdminDashboard() {
               <ResponsiveContainer width="100%" height={200}>
                 <RadialBarChart cx="50%" cy="50%" innerRadius={50} outerRadius={76} startAngle={90} endAngle={-270} data={radialData}>
                   <RadialBar dataKey="value" cornerRadius={6} />
-                  <Tooltip {...TT} formatter={(v: any) => [`${v}%`, '']} />
+                  <Tooltip {...TT} formatter={(v: unknown) => [`${v}%`, '']} />
                 </RadialBarChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -915,7 +967,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={115} />
-                  <Tooltip {...TT} formatter={(v: any) => [v, 'Units']} />
+                  <Tooltip {...TT} formatter={(v: unknown) => [String(v), 'Units']} />
                   <Bar dataKey="qty" radius={[0, 5, 5, 0]}>
                     {topProducts.map((_, i) => (
                       <Cell key={i} fill={i === 0 ? C_GREEN : i < 3 ? '#22c55e99' : '#86efac'} />
@@ -933,7 +985,7 @@ export default function AdminDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis type="number" tickFormatter={v => `₱${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={90} />
-                  <Tooltip {...TT} formatter={(v: any) => [fmt(v), 'Revenue']} />
+                  <Tooltip {...TT} formatter={(v: unknown) => [fmt(asNumber(v)), 'Revenue']} />
                   <Bar dataKey="value" radius={[0, 5, 5, 0]}>
                     {categoryData.map((_, i) => <Cell key={i} fill={CHART_PAL[i % CHART_PAL.length]} />)}
                   </Bar>
@@ -964,7 +1016,7 @@ export default function AdminDashboard() {
                     <YAxis type="category" dataKey="pair" tick={{ fontSize: 10, fill: '#64748b' }} width={190} />
                     <Tooltip
                       {...TT}
-                      formatter={(value: any) => [value, 'Times bought together']}
+                      formatter={(value: unknown) => [String(value), 'Times bought together']}
                       labelFormatter={(_, payload) => {
                         const row = payload?.[0]?.payload as BasketPairRow | undefined;
                         if (!row) return '';
