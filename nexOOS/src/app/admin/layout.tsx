@@ -90,6 +90,24 @@ function formatName(identifier: string) {
   );
 }
 
+function normalizeStaffRole(rawRole: string): 'super_admin' | 'admin' | 'staff' {
+  if (rawRole === 'super_admin') return 'super_admin';
+  if (rawRole === 'admin') return 'admin';
+  return 'staff';
+}
+
+function getStaffRoleLabel(role: 'super_admin' | 'admin' | 'staff', staffLabel = 'Staff') {
+  if (role === 'super_admin') return 'Super Admin';
+  if (role === 'admin') return 'Admin';
+  return staffLabel;
+}
+
+function getStaffRoleBadgeClass(role: 'super_admin' | 'admin' | 'staff') {
+  if (role === 'super_admin') return 'bg-amber-500/20 text-amber-300';
+  if (role === 'admin') return 'bg-blue-500/20 text-blue-300';
+  return 'bg-slate-500/20 text-slate-400';
+}
+
 const ADMIN_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const ADMIN_ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'] as const;
 
@@ -213,7 +231,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     }
     const email = (payload?.email as string) ?? '';
     const rawRole = (payload?.staffRole as string) ?? 'staff';
-    const role: 'super_admin' | 'admin' | 'staff' = rawRole === 'super_admin' ? 'super_admin' : rawRole === 'admin' ? 'admin' : 'staff';
+    const role = normalizeStaffRole(rawRole);
     const storedName = getAdminDisplayName();
     const jwtFullName = (payload?.fullName as string) ?? '';
     queueMicrotask(() => {
@@ -270,7 +288,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {/* ── Mobile overlay ─────────────────────────────────────────────────── */}
       {sidebarOpen && (
-        <div
+        <button
+          type="button"
+          aria-label="Close sidebar"
           className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
@@ -364,12 +384,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div className="min-w-0 flex-1">
               <p className="text-[12px] font-bold text-white truncate leading-tight group-hover:text-blue-300 transition-colors">{adminName}</p>
               <p className="text-[10px] text-slate-500 truncate leading-tight">{adminEmail}</p>
-              <span className={`inline-block mt-0.5 text-[9px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded ${
-                staffRole === 'super_admin' ? 'bg-amber-500/20 text-amber-300'
-                : staffRole === 'admin' ? 'bg-blue-500/20 text-blue-300'
-                : 'bg-slate-500/20 text-slate-400'
-              }`}>
-                {staffRole === 'super_admin' ? 'Super Admin' : staffRole === 'admin' ? 'Admin' : 'Staff'}
+              <span className={`inline-block mt-0.5 text-[9px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded ${getStaffRoleBadgeClass(staffRole)}`}>
+                {getStaffRoleLabel(staffRole)}
               </span>
             </div>
           </Link>
@@ -435,7 +451,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               {/* Dropdown */}
               {bellOpen && (
                 <>
-                  <div className="fixed inset-0 z-30" onClick={() => setBellOpen(false)} />
+                  <button type="button" aria-label="Close notifications" className="fixed inset-0 z-30" onClick={() => setBellOpen(false)} />
                   <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-100 z-40 overflow-hidden">
                     {/* Header */}
                     <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
@@ -528,7 +544,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               </div>
               <div className="hidden sm:block leading-tight">
                 <p className="text-xs font-black text-slate-900">{adminName}</p>
-                <p className="text-[10px] text-slate-400">{staffRole === 'super_admin' ? 'Super Admin' : staffRole === 'admin' ? 'Admin' : 'Admin Staff'}</p>
+                <p className="text-[10px] text-slate-400">{getStaffRoleLabel(staffRole, 'Admin Staff')}</p>
               </div>
             </Link>
           </div>
@@ -555,7 +571,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {logoutModalOpen && (
         <>
-          <div
+          <button
+            type="button"
+            aria-label="Cancel logout"
             className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm"
             onClick={() => setLogoutModalOpen(false)}
           />

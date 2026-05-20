@@ -45,13 +45,6 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
   Cancelled:   [],
 };
 
-// Visual flow steps (in order)
-const ORDER_FLOW = [
-  { label: 'Processing',  color: 'bg-blue-500',  text: 'text-blue-600',  ring: 'ring-blue-200'  },
-  { label: 'In Transit',  color: 'bg-amber-500', text: 'text-amber-600', ring: 'ring-amber-200' },
-  { label: 'Delivered',   color: 'bg-green-500', text: 'text-green-600', ring: 'ring-green-200'  },
-];
-
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('en-PH', {
     style: 'currency',

@@ -111,7 +111,7 @@ export default function Home() {
     loadFeaturedProducts();
 
     return () => controller.abort();
-  }, [selectedBranch]);
+  }, [categoryInterestMap, interestMap, selectedBranch]);
 
   const branchStockByProductId = React.useMemo(
     () => new Map(branchInventory.map((item) => [item.product_id, item.stock])),

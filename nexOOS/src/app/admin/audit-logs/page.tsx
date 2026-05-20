@@ -237,17 +237,19 @@ export default function AuditLogsPage() {
             <p className="text-xs text-slate-400">{total.toLocaleString()} total entries</p>
           </div>
 
-          {loading ? (
+          {loading && (
             <div className="flex h-48 items-center justify-center">
               <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
             </div>
-          ) : logs.length === 0 ? (
+          )}
+          {!loading && logs.length === 0 && (
             <div className="p-16 text-center">
               <ScrollText className="mx-auto mb-3 h-8 w-8 text-slate-200" />
               <p className="text-sm font-bold text-slate-400">No log entries found</p>
               <p className="mt-1 text-xs text-slate-300">Actions will appear here as they happen</p>
             </div>
-          ) : (
+          )}
+          {!loading && logs.length > 0 && (
             <div className="divide-y divide-slate-50">
               {logs.map(log => {
                 const style = CAT_STYLES[log.category] ?? CAT_STYLES.general;

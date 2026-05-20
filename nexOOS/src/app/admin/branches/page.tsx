@@ -40,11 +40,13 @@ export default function AdminBranchesPage() {
           <span className="text-xs text-slate-400">{branches.length} branches</span>
         </div>
 
-        {loading ? (
+        {loading && (
           <div className="flex items-center justify-center h-40"><Loader2 className="w-6 h-6 animate-spin text-blue-600" /></div>
-        ) : branches.length === 0 ? (
+        )}
+        {!loading && branches.length === 0 && (
           <div className="p-10 text-center text-slate-400 text-sm">No branches found.</div>
-        ) : (
+        )}
+        {!loading && branches.length > 0 && (
           <div className="divide-y divide-slate-50">
             {branches.map(b => (
               <div key={b.id} className="px-6 py-5 flex items-start gap-4">

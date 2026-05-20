@@ -71,13 +71,15 @@ export default function AdminCustomersPage() {
           </h2>
         </div>
 
-        {loading ? (
+        {loading && (
           <div className="flex items-center justify-center h-40">
             <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
           </div>
-        ) : customers.length === 0 ? (
+        )}
+        {!loading && customers.length === 0 && (
           <div className="p-10 text-center text-slate-400 text-sm">No customers found.</div>
-        ) : (
+        )}
+        {!loading && customers.length > 0 && (
           <div className="divide-y divide-slate-50">
             {customers.map(c => {
               const displayId = c.customer_number ?? c.id.slice(0, 8).toUpperCase();
