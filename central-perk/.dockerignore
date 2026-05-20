@@ -1,13 +1,6 @@
-.env
-.env.*
-!.env.example
-.next
-.runtime
-coverage
-logs
 node_modules
+.next
+coverage
+.git
+.github
 npm-debug.log*
-services/*/coverage
-services/*/dist
-services/*/node_modules
-tests/load/results
