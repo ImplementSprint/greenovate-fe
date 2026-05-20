@@ -90,8 +90,9 @@ export default function AdminEmailsPage() {
         <h2 className="font-black text-slate-900 mb-4">Send Test Email</h2>
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1.5">Recipient Email</label>
+            <label htmlFor="test-email" className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1.5">Recipient Email</label>
             <input
+              id="test-email"
               type="email"
               value={testEmail}
               onChange={e => setTestEmail(e.target.value)}
@@ -100,8 +101,9 @@ export default function AdminEmailsPage() {
             />
           </div>
           <div>
-            <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1.5">Email Type</label>
+            <label htmlFor="email-type" className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1.5">Email Type</label>
             <select
+              id="email-type"
               value={emailType}
               onChange={e => setEmailType(e.target.value)}
               className="w-full px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"

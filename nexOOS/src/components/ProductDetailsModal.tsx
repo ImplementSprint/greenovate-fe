@@ -136,7 +136,7 @@ export default function ProductDetailsModal() {
       .finally(() => { if (!ctrl.signal.aborted) setIsLoadingRecs(false); });
 
     return () => ctrl.abort();
-  }, [selectedProduct]);
+  }, [categoryInterestMap, selectedProduct]);
 
   useEffect(() => {
     if (!selectedProduct) {

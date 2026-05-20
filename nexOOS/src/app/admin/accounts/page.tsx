@@ -74,6 +74,41 @@ type StaffAccount = {
   created_at: string;
 };
 
+const getRoleIconBackground = (role: string) => {
+  if (role === 'super_admin') return 'bg-amber-50';
+  if (role === 'admin') return 'bg-blue-50';
+  return 'bg-slate-100';
+};
+
+const getToggleAccountClassName = (isActive: boolean) =>
+  isActive
+    ? 'text-amber-500 hover:bg-amber-50 hover:text-amber-700'
+    : 'text-green-500 hover:bg-green-50 hover:text-green-700';
+
+const roleLabel = (role: string) => {
+  if (role === 'super_admin') return 'Super Admin';
+  if (role === 'admin') return 'Admin';
+  return 'Admin Staff';
+};
+
+const roleIcon = (role: string) => {
+  if (role === 'super_admin') return <Crown className="h-4 w-4 text-amber-500" />;
+  if (role === 'admin') return <Shield className="h-4 w-4 text-blue-500" />;
+  return <User className="h-4 w-4 text-slate-400" />;
+};
+
+const roleBadgeClass = (role: string) => {
+  if (role === 'super_admin') return 'border border-amber-100 bg-amber-50 text-amber-700';
+  if (role === 'admin') return 'border border-blue-100 bg-blue-50 text-blue-700';
+  return 'border border-slate-200 bg-slate-100 text-slate-600';
+};
+
+function ToggleAccountIcon({ isActive, isLoading }: { isActive: boolean; isLoading: boolean }) {
+  if (isLoading) return <Loader2 className="h-4 w-4 animate-spin" />;
+  return isActive ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />;
+}
+
+
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const parts = token.split('.');
@@ -226,11 +261,11 @@ export default function AdminAccountsPage() {
         : `${name}'s account will be reactivated and they'll regain access.`,
       confirmLabel: currentActive ? 'Deactivate' : 'Activate',
       variant: currentActive ? 'danger' : 'warning',
-      onConfirm: () => doToggleActive(id, currentActive),
+      onConfirm: () => doToggleActive(id),
     });
   };
 
-  const doToggleActive = async (id: string, currentActive: boolean) => {
+  const doToggleActive = async (id: string) => {
     const token = getAccessToken();
     if (!token) return;
 
@@ -264,24 +299,6 @@ export default function AdminAccountsPage() {
   const adminAccounts = accounts.filter(a => a.role === 'admin').length;
   const staffAccounts = accounts.filter(a => a.role === 'staff').length;
   const inactiveAccounts = totalAccounts - activeAccounts;
-
-  const roleLabel = (role: string) => {
-    if (role === 'super_admin') return 'Super Admin';
-    if (role === 'admin') return 'Admin';
-    return 'Admin Staff';
-  };
-
-  const roleIcon = (role: string) => {
-    if (role === 'super_admin') return <Crown className="h-4 w-4 text-amber-500" />;
-    if (role === 'admin') return <Shield className="h-4 w-4 text-blue-500" />;
-    return <User className="h-4 w-4 text-slate-400" />;
-  };
-
-  const roleBadgeClass = (role: string) => {
-    if (role === 'super_admin') return 'border border-amber-100 bg-amber-50 text-amber-700';
-    if (role === 'admin') return 'border border-blue-100 bg-blue-50 text-blue-700';
-    return 'border border-slate-200 bg-slate-100 text-slate-600';
-  };
 
   return (
     <div className="w-full space-y-5">
@@ -444,10 +461,10 @@ export default function AdminAccountsPage() {
                 className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               />
 
-              <div>
-                <label className="mb-2 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+              <fieldset>
+                <legend className="mb-2 block text-[10px] font-black uppercase tracking-widest text-slate-400">
                   Role
-                </label>
+                </legend>
                 <div className="flex flex-col gap-2 md:flex-row">
                   {[
                     { value: 'staff', label: 'Admin Staff', icon: User, desc: 'No accounts tab' },
@@ -477,7 +494,7 @@ export default function AdminAccountsPage() {
                     </button>
                   ))}
                 </div>
-              </div>
+              </fieldset>
 
               <div className="flex flex-col gap-2 sm:flex-row">
                 <button
@@ -502,13 +519,15 @@ export default function AdminAccountsPage() {
           </div>
         )}
 
-        {loading ? (
+        {loading && (
           <div className="flex h-40 items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
           </div>
-        ) : accounts.length === 0 ? (
+        )}
+        {!loading && accounts.length === 0 && (
           <div className="p-10 text-center text-sm text-slate-400">No accounts found.</div>
-        ) : (
+        )}
+        {!loading && accounts.length > 0 && (
           <div className="divide-y divide-slate-50">
             {accounts.map(a => {
               const isSelf = a.id === myId;
@@ -521,11 +540,7 @@ export default function AdminAccountsPage() {
                   key={a.id}
                   className={`flex flex-col gap-3 px-6 py-4 lg:flex-row lg:items-center lg:gap-4 ${!a.is_active ? 'opacity-60' : ''}`}
                 >
-                  <div
-                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
-                      isSuperAdminAcc ? 'bg-amber-50' : a.role === 'admin' ? 'bg-blue-50' : 'bg-slate-100'
-                    }`}
-                  >
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${getRoleIconBackground(a.role)}`}>
                     {roleIcon(a.role)}
                   </div>
 
@@ -568,19 +583,9 @@ export default function AdminAccountsPage() {
                         onClick={() => toggleActive(a.id, a.full_name, a.is_active)}
                         disabled={toggling === a.id}
                         title={a.is_active ? 'Deactivate account' : 'Activate account'}
-                        className={`rounded-lg p-2 transition-colors disabled:opacity-50 ${
-                          a.is_active
-                            ? 'text-amber-500 hover:bg-amber-50 hover:text-amber-700'
-                            : 'text-green-500 hover:bg-green-50 hover:text-green-700'
-                        }`}
+                        className={`rounded-lg p-2 transition-colors disabled:opacity-50 ${getToggleAccountClassName(a.is_active)}`}
                       >
-                        {toggling === a.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : a.is_active ? (
-                          <PowerOff className="h-4 w-4" />
-                        ) : (
-                          <Power className="h-4 w-4" />
-                        )}
+                        <ToggleAccountIcon isActive={a.is_active} isLoading={toggling === a.id} />
                       </button>
                     )}
 
