@@ -17,7 +17,9 @@
     "test:load:POS-frontend": "k6 run --out influxdb=http://localhost:8086/k6 tests/k6/load-test.js",
     "test:load:simple:POS-frontend": "k6 run tests/k6/load-test.js",
     "test:integration:POS-frontend": "jest --testPathPattern=tests/integration --testEnvironment=node --runInBand",
-    "test:all:POS-frontend": "jest"
+    "test:all:POS-frontend": "jest",
+    "test": "jest",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.100.1",
