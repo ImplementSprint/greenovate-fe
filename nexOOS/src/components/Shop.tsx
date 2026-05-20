@@ -11,14 +11,17 @@ import {
   X,
   SlidersHorizontal,
   ChevronDown,
+  TrendingUp,
+  Sparkles,
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
-import { buildApiUrl } from '@/lib/api';
+import { buildApiUrl, fetchJsonWithRetry } from '@/lib/api';
 import { Product } from '../types';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
-const CATEGORIES = ['All', 'Medicines', 'First Aid', 'Personal Care', 'Vitamins'];
 const SORT_OPTIONS = [
+  { label: 'Top Sold', value: 'top-sold' },
+  { label: '✨ For You', value: 'for-you' },
   { label: 'Price: Low to High', value: 'price-asc' },
   { label: 'Price: High to Low', value: 'price-desc' },
 ] as const;
@@ -47,6 +50,37 @@ const getPaginationButtonClassName = (isCurrentPage: boolean) =>
       : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
   }`;
 
+const normalizeProducts = (products: Product[]) => {
+  const seen = new Set<string>();
+
+  return products.filter((product) => {
+    const signature = [
+      product.id?.trim() || 'missing-id',
+      product.name?.trim() || 'missing-name',
+      product.category?.trim() || 'missing-category',
+      String(product.price ?? ''),
+    ].join('|');
+
+    if (seen.has(signature)) {
+      return false;
+    }
+
+    seen.add(signature);
+    return true;
+  });
+};
+
+const getProductRenderKey = (product: Product, idx: number) =>
+  [
+    product.id?.trim() || 'missing-id',
+    product.name?.trim() || 'missing-name',
+    product.category?.trim() || 'missing-category',
+    idx,
+  ].join('|');
+
+const getApiSortByValue = (sortBy: SortOption) =>
+  sortBy === 'for-you' || sortBy === 'top-sold' ? 'popularity' : sortBy;
+
 export default function Shop() {
   const {
     selectedBranch,
@@ -55,18 +89,24 @@ export default function Shop() {
     setView,
     addToCart,
     setSelectedProduct,
+    selectedProduct,
     searchQuery,
     setSearchQuery,
+    interestMap,
+    categoryInterestMap,
+    trendingSearches,
   } = useAppContext();
 
   const [selectedCategories, setSelectedCategories] = useState<string[]>(['All']);
   const [pendingCategories, setPendingCategories] = useState<string[]>(['All']);
   const [priceRange, setPriceRange] = useState({ min: '', max: '' });
   const [inStockOnly, setInStockOnly] = useState(false);
-  const [sortBy, setSortBy] = useState<SortOption>('price-asc');
+  const [sortBy, setSortBy] = useState<SortOption>('for-you');
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [products, setProducts] = useState<Product[]>([]);
+  const [availableCategories, setAvailableCategories] = useState<string[]>(['All']);
+  const rawProductsRef = useRef<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [addedProductName, setAddedProductName] = useState('');
@@ -107,26 +147,51 @@ export default function Shop() {
         if (priceRange.max.trim()) params.set('maxPrice', priceRange.max.trim());
         if (inStockOnly) params.set('inStockOnly', 'true');
         if (selectedBranch) params.set('branchId', String(selectedBranch.id));
-        params.set('sortBy', sortBy);
+        // Fetch best-selling products for both "For You" and "Top Sold".
+        // "For You" is then re-ranked client-side using browsing interests.
+        params.set('sortBy', getApiSortByValue(sortBy));
 
-        const response = await fetch(buildApiUrl(`/api/products?${params.toString()}`), {
-          signal: controller.signal,
-        });
-        const payload = await response.json();
+        const payload = await fetchJsonWithRetry<{ data?: Product[] }>(
+          `/api/products?${params.toString()}`,
+          { signal: controller.signal },
+        );
 
-        if (!response.ok) {
-          throw new Error(payload.error || 'Failed to load products');
+        const fetched = normalizeProducts(payload?.data ?? []);
+        rawProductsRef.current = fetched;
+
+        // Build category list dynamically from all products (no filter applied yet)
+        if (!searchQuery.trim() && !hasCategoryFilter) {
+          const cats = ['All', ...Array.from(new Set(fetched.map((p) => p.category).filter(Boolean))).sort()];
+          setAvailableCategories(cats);
         }
 
-        setProducts(payload.data ?? []);
+        // Apply Shopee-style scoring immediately if interests are already loaded
+        if (sortBy === 'for-you' && (interestMap.size > 0 || categoryInterestMap.size > 0)) {
+          const scored = [...fetched].sort((a, b) => {
+            const catA = (categoryInterestMap.get(a.category) ?? 0) * 100;
+            const catB = (categoryInterestMap.get(b.category) ?? 0) * 100;
+            const prodA = (interestMap.get(a.id) ?? 0) * 10;
+            const prodB = (interestMap.get(b.id) ?? 0) * 10;
+            const soldA = a.sold ?? 0;
+            const soldB = b.sold ?? 0;
+            return (catB + prodB + soldB) - (catA + prodA + soldA);
+          });
+          setProducts(scored);
+        } else {
+          setProducts(fetched);
+        }
       } catch (err) {
         if ((err as Error).name === 'AbortError') {
           return;
         }
-
-        console.error('Product fetch failed:', err);
+        // Silently ignore network errors and 502/503 — services still starting up
+        const status = (err as { status?: number }).status;
+        const isStartupError = err instanceof TypeError || status === 503 || status === 502;
+        if (!isStartupError) {
+          console.error('Product fetch failed:', err);
+          setError('Unable to load products right now.');
+        }
         setProducts([]);
-        setError('Unable to load products right now.');
       } finally {
         if (!controller.signal.aborted) {
           setIsLoading(false);
@@ -162,6 +227,30 @@ export default function Shop() {
     return () => globalThis.clearTimeout(timeout);
   }, [searchQuery]);
 
+  // Re-sort products whenever interests change — Shopee-style scoring
+  useEffect(() => {
+    const raw = rawProductsRef.current;
+    if (raw.length === 0) return;
+    if (sortBy !== 'for-you' || (interestMap.size === 0 && categoryInterestMap.size === 0)) {
+      setProducts(raw);
+      return;
+    }
+    const scored = [...raw].sort((a, b) => {
+      // Category score × 100 — the dominant signal (like Shopee feed)
+      const catA = (categoryInterestMap.get(a.category) ?? 0) * 100;
+      const catB = (categoryInterestMap.get(b.category) ?? 0) * 100;
+      // Individual product clicks × 10 — boost within category
+      const prodA = (interestMap.get(a.id) ?? 0) * 10;
+      const prodB = (interestMap.get(b.id) ?? 0) * 10;
+      // Sold count — popularity tiebreaker
+      const soldA = a.sold ?? 0;
+      const soldB = b.sold ?? 0;
+      return (catB + prodB + soldB) - (catA + prodA + soldA);
+    });
+    setProducts(scored);
+  }, [interestMap, categoryInterestMap, sortBy]);
+
+
   const totalPages = Math.ceil(products.length / productsPerPage);
   const currentProducts = useMemo(
     () =>
@@ -173,7 +262,7 @@ export default function Shop() {
   );
 
   const selectedSortLabel =
-    SORT_OPTIONS.find((option) => option.value === sortBy)?.label ?? 'Price: Low to High';
+    SORT_OPTIONS.find((option) => option.value === sortBy)?.label ?? 'For You';
 
   function handlePageChange(page: number) {
     setCurrentPage(page);
@@ -185,9 +274,11 @@ export default function Shop() {
     setPendingCategories(['All']);
     setPriceRange({ min: '', max: '' });
     setInStockOnly(false);
-    setSortBy('price-asc');
+    setSortBy('for-you');
     setSearchQuery('');
   }
+
+  const showTrending = trendingSearches.length > 0 && !searchQuery.trim();
 
   let content: React.ReactNode;
 
@@ -245,16 +336,18 @@ export default function Shop() {
     content = (
       <>
         <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-          {currentProducts.map((product) => {
+          {currentProducts.map((product, idx) => {
             const inventoryItem = selectedBranch
               ? branchInventory.find((inv) => inv.product_id === product.id)
               : null;
             const stock = getProductStock(product, inventoryItem?.stock);
-            const isOutOfStock = Boolean(selectedBranch && stock === 0);
+            const isOutOfStock = selectedBranch
+              ? stock === 0
+              : typeof product.stock === 'number' && product.stock === 0;
 
             return (
               <motion.div
-                key={product.id}
+                key={getProductRenderKey(product, idx)}
                 layout
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -276,9 +369,9 @@ export default function Shop() {
                       {product.category}
                     </span>
                   </div>
-                  {selectedBranch && (
-                    <div className="absolute bottom-3 left-3 right-3">
-                      {stock > 0 ? (
+                  <div className="absolute bottom-3 left-3 right-3">
+                    {selectedBranch ? (
+                      stock > 0 ? (
                         <span className="flex w-fit items-center gap-1.5 rounded-full bg-blue-500/90 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-sm">
                           <CheckCircle2 className="h-3 w-3" /> In Stock ({stock})
                         </span>
@@ -286,9 +379,15 @@ export default function Shop() {
                         <span className="flex w-fit items-center gap-1.5 rounded-full bg-red-500/90 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-sm">
                           <X className="h-3 w-3" /> Out of Stock
                         </span>
-                      )}
-                    </div>
-                  )}
+                      )
+                    ) : (
+                      typeof product.stock === 'number' && product.stock === 0 && (
+                        <span className="flex w-fit items-center gap-1.5 rounded-full bg-red-500/90 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-sm">
+                          <X className="h-3 w-3" /> Out of Stock
+                        </span>
+                      )
+                    )}
+                  </div>
                 </button>
 
                 <div className="flex flex-1 flex-col p-3.5">
@@ -304,6 +403,13 @@ export default function Shop() {
                       {product.description}
                     </p>
                   </button>
+
+                  {typeof product.sold === 'number' && (
+                    <div className="mb-2 flex items-center gap-1 text-[10px] font-semibold text-emerald-600">
+                      <TrendingUp className="h-3 w-3" />
+                      {product.sold.toLocaleString()} sold
+                    </div>
+                  )}
 
                   <div className="mt-auto flex items-center justify-between pt-3.5">
                     <div className="text-sm font-black tracking-tight text-slate-900 lg:text-base">
@@ -402,7 +508,7 @@ export default function Shop() {
     <main className="flex-1 bg-slate-50 py-7 lg:py-8">
       <AnimatePresence>
         {addedProductName && (
-          <>
+          <React.Fragment key={`shop-added-${addedProductName}`}>
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -426,13 +532,13 @@ export default function Shop() {
                 <p className="text-slate-500 font-medium">{addedProductName}</p>
               </div>
             </motion.div>
-          </>
+          </React.Fragment>
         )}
       </AnimatePresence>
 
       <AnimatePresence>
         {isFilterModalOpen && (
-          <>
+          <React.Fragment key="shop-filter-modal">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -472,7 +578,7 @@ export default function Shop() {
                 </div>
 
                 <div className="space-y-3">
-                  {CATEGORIES.map((category) => (
+                  {availableCategories.map((category) => (
                     <button
                       key={category}
                       onClick={() => togglePendingCategory(category)}
@@ -513,7 +619,7 @@ export default function Shop() {
                 </div>
               </div>
             </motion.div>
-          </>
+          </React.Fragment>
         )}
       </AnimatePresence>
 
@@ -627,6 +733,43 @@ export default function Shop() {
             </button>
           </div>
         </div>
+
+        {sortBy === 'for-you' && (interestMap.size > 0 || categoryInterestMap.size > 0) && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-4 flex items-center gap-2.5 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3"
+          >
+            <Sparkles className="h-4 w-4 shrink-0 text-blue-500" />
+            <p className="text-sm font-semibold text-blue-700">
+              Personalized for you — based on your browsing history
+            </p>
+          </motion.div>
+        )}
+
+        {showTrending && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-5 rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-sm"
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-blue-500" />
+              <span className="text-sm font-black tracking-tight text-slate-900">Trending Now</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {trendingSearches.map((term) => (
+                <button
+                  key={term}
+                  onClick={() => setSearchQuery(term)}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-3.5 py-1.5 text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                >
+                  {term}
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
 
         <div>{content}</div>
       </div>
