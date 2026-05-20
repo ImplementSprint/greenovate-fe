@@ -90,6 +90,51 @@ function formatName(identifier: string) {
   );
 }
 
+const ADMIN_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+const ADMIN_ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'] as const;
+
+async function logInactivityLogout() {
+  const token = getAccessToken();
+  if (!token) return;
+
+  try {
+    await fetch('/api/admin/audit-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        action: 'Automatically logged out due to 15 minutes of inactivity',
+        category: 'auth',
+      }),
+    });
+  } catch {
+    // non-fatal
+  }
+}
+
+function finishAdminSessionWithRedirect(path: string) {
+  clearAccessToken();
+  clearAdminDisplayName();
+  fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
+  window.location.replace(path);
+}
+
+async function handleAdminInactivityLogout() {
+  await logInactivityLogout();
+  finishAdminSessionWithRedirect('/?session=expired');
+}
+
+function addActivityListeners(listener: () => void) {
+  ADMIN_ACTIVITY_EVENTS.forEach((eventName) =>
+    window.addEventListener(eventName, listener, { passive: true }),
+  );
+}
+
+function removeActivityListeners(listener: () => void) {
+  ADMIN_ACTIVITY_EVENTS.forEach((eventName) =>
+    window.removeEventListener(eventName, listener),
+  );
+}
+
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -111,40 +156,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   // Auto-logout after 15 minutes of inactivity
   useEffect(() => {
-    const TIMEOUT_MS = 15 * 60 * 1000;
     let timer: ReturnType<typeof setTimeout>;
 
     const reset = () => {
       clearTimeout(timer);
-      timer = setTimeout(async () => {
-        // Log inactivity logout before clearing the token
-        const token = getAccessToken();
-        if (token) {
-          try {
-            await fetch('/api/admin/audit-log', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-              body: JSON.stringify({
-                action: 'Automatically logged out due to 15 minutes of inactivity',
-                category: 'auth',
-              }),
-            });
-          } catch { /* non-fatal */ }
-        }
-        clearAccessToken();
-        clearAdminDisplayName();
-        fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
-        window.location.replace('/?session=expired');
-      }, TIMEOUT_MS);
+      timer = setTimeout(() => {
+        void handleAdminInactivityLogout();
+      }, ADMIN_IDLE_TIMEOUT_MS);
     };
 
-    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'];
-    events.forEach(e => window.addEventListener(e, reset, { passive: true }));
-    reset(); // start the timer
+    addActivityListeners(reset);
+    reset();
 
     return () => {
       clearTimeout(timer);
-      events.forEach(e => window.removeEventListener(e, reset));
+      removeActivityListeners(reset);
     };
   }, []);
 
@@ -212,10 +238,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }, [router]);
 
   const handleLogout = () => {
-    clearAccessToken();
-    clearAdminDisplayName();
-    fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
-    window.location.href = '/';
+    finishAdminSessionWithRedirect('/');
   };
 
   const currentItem = ALL_NAV.find(n =>
