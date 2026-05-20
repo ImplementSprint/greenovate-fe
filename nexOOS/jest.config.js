@@ -12,10 +12,9 @@ const customJestConfig = {
   modulePathIgnorePatterns: ['<rootDir>/.next/'],
   collectCoverage: true,
   collectCoverageFrom: [
-    '<rootDir>/src/lib/api.ts',
-    '<rootDir>/src/lib/auth.ts',
-    '<rootDir>/src/lib/date.ts',
-    '<rootDir>/src/lib/phone.ts',
+    '<rootDir>/src/**/*.{ts,tsx}',
+    '!<rootDir>/src/**/*.d.ts',
+    '!<rootDir>/src/app/**/*.{ts,tsx}',
   ],
   coverageReporters: ['text', 'lcov', 'json-summary'],
   coverageThreshold: {
