@@ -206,43 +206,183 @@ function aprioriMine(transactions: string[][], minSupport: number, maxLen = 4): 
 // Equivalent to: association_rules(frequent_itemsets, metric="confidence", min_threshold=minconf)
 type RawRule = { antecedent: string[]; consequent: string[]; support: number; count: number; confidence: number; lift: number; leverage: number; conviction: number };
 
+const compareText = (left: string, right: string) => left.localeCompare(right);
+const sortStrings = (items: string[]) => [...items].sort(compareText);
+const buildItemsetKey = (items: string[]) => sortStrings(items).join('||');
+const compareRulePriority = (a: RawRule, b: RawRule) =>
+  b.lift - a.lift || b.confidence - a.confidence || b.support - a.support;
+const comparePairPriority = (a: RawRule, b: RawRule) =>
+  b.lift - a.lift || b.confidence - a.confidence || b.count - a.count;
+
+function properSubsets(arr: string[]): string[][] {
+  const n = arr.length;
+  const subs: string[][] = [];
+
+  for (let mask = 1; mask < (1 << n) - 1; mask++) {
+    const sub: string[] = [];
+    for (let i = 0; i < n; i++) {
+      if (mask & (1 << i)) {
+        sub.push(arr[i]);
+      }
+    }
+    subs.push(sub);
+  }
+
+  return subs;
+}
+
+function createRule(
+  items: string[],
+  antecedent: string[],
+  supAB: number,
+  count: number,
+  getSupport: (subset: string[]) => number,
+  minConfidence: number,
+): RawRule | null {
+  const consequent = items.filter(item => !antecedent.includes(item));
+  if (consequent.length === 0) return null;
+
+  const supA = getSupport(antecedent);
+  const supB = getSupport(consequent);
+  if (supA === 0 || supB === 0) return null;
+
+  const confidence = supAB / supA;
+  if (confidence < minConfidence) return null;
+
+  const rawConviction = (1 - supB) / Math.max(1e-9, 1 - confidence);
+  return {
+    antecedent: sortStrings(antecedent),
+    consequent: sortStrings(consequent),
+    support: supAB,
+    count,
+    confidence,
+    lift: confidence / supB,
+    leverage: supAB - supA * supB,
+    conviction: Number.isFinite(rawConviction) ? rawConviction : 999,
+  };
+}
+
+function buildTransactions(orders: Order[]): string[][] {
+  const transactions: string[][] = [];
+
+  for (const order of orders) {
+    if (order.status === 'Cancelled') continue;
+
+    const seen = new Map<string, string>();
+    for (const item of order.items ?? []) {
+      const rawName = String(item.name ?? '').trim();
+      const rawId = String(item.id ?? '').trim();
+      const identity = rawId || rawName.toLowerCase();
+
+      if (!identity || !rawName || seen.has(identity)) continue;
+      seen.set(identity, rawName);
+    }
+
+    const names = [...seen.values()];
+    if (names.length > 0) transactions.push(names);
+  }
+
+  return transactions;
+}
+
+function dedupeSymmetricRules(rules: RawRule[], limit: number) {
+  const pairBest = new Map<string, RawRule>();
+
+  for (const rule of rules) {
+    const key = buildItemsetKey([...rule.antecedent, ...rule.consequent]);
+    const existing = pairBest.get(key);
+    if (!existing || rule.confidence > existing.confidence) {
+      pairBest.set(key, rule);
+    }
+  }
+
+  return [...pairBest.values()].sort(comparePairPriority).slice(0, limit);
+}
+
+function formatBasketRule(rule: RawRule): BasketPairRow {
+  const shorten = (items: string[]) =>
+    items.length === 1 ? items[0] : `{${items.join(' + ')}}`;
+
+  return {
+    pair: `${shorten(rule.antecedent)} + ${shorten(rule.consequent)}`,
+    count: rule.count,
+    support: Number((rule.support * 100).toFixed(1)),
+    confidence: Number((rule.confidence * 100).toFixed(1)),
+    lift: Number(rule.lift.toFixed(2)),
+    leverage: Number(rule.leverage.toFixed(3)),
+    conviction: Number(Math.min(rule.conviction, 99).toFixed(2)),
+    antecedentItems: rule.antecedent,
+    consequentItems: rule.consequent,
+    left: shorten(rule.antecedent),
+    right: shorten(rule.consequent),
+  };
+}
+
+function buildDateRange(viewType: ViewType, year: number, month: number, compareYear: number) {
+  if (viewType === 'overall') return null;
+  if (viewType === 'month') {
+    return {
+      from: new Date(year, month, 1).toISOString(),
+      to: new Date(year, month + 1, 0, 23, 59, 59).toISOString(),
+    };
+  }
+  if (viewType === 'year') {
+    return {
+      from: new Date(year, 0, 1).toISOString(),
+      to: new Date(year, 11, 31, 23, 59, 59).toISOString(),
+    };
+  }
+
+  const minY = Math.min(year, compareYear);
+  const maxY = Math.max(year, compareYear);
+  return {
+    from: new Date(minY, 0, 1).toISOString(),
+    to: new Date(maxY, 11, 31, 23, 59, 59).toISOString(),
+  };
+}
+
+function filterOrdersByView(orders: Order[], viewType: ViewType, year: number, month: number, compareYear: number) {
+  if (viewType === 'overall') return orders;
+  if (viewType === 'month') return filterMonth(orders, year, month);
+  if (viewType === 'year') return filterYear(orders, year);
+  return orders.filter(order => {
+    const orderYear = new Date(order.date).getFullYear();
+    return orderYear === year || orderYear === compareYear;
+  });
+}
+
+function buildTimeSeries(orders: Order[], viewType: ViewType, year: number, month: number, compareYear: number) {
+  if (viewType === 'overall') return buildOverall(orders);
+  if (viewType === 'month') return buildDaily(orders, year, month);
+  if (viewType === 'year') return buildMonthly(orders, year);
+  return buildCompare(orders, year, compareYear);
+}
+
+function getPeriodLabel(viewType: ViewType, year: number, month: number, compareYear: number) {
+  if (viewType === 'overall') return 'All Time';
+  if (viewType === 'month') return `${MONTHS_LONG[month]} ${year}`;
+  if (viewType === 'year') return String(year);
+  return `${year} vs ${compareYear}`;
+}
+
 function generateRules(frequentItemsets: FreqItemset[], minConfidence: number): RawRule[] {
   const supportMap = new Map<string, { support: number; count: number }>();
-  for (const fi of frequentItemsets)
-    supportMap.set([...fi.items].sort().join('||'), { support: fi.support, count: fi.count });
+  for (const fi of frequentItemsets) {
+    supportMap.set(buildItemsetKey(fi.items), { support: fi.support, count: fi.count });
+  }
 
-  const getSupport = (items: string[]) => supportMap.get([...items].sort().join('||'))?.support ?? 0;
-
-  // All non-empty proper subsets of an array (used for antecedent candidates)
-  const properSubsets = (arr: string[]): string[][] => {
-    const n = arr.length, subs: string[][] = [];
-    for (let mask = 1; mask < (1 << n) - 1; mask++) {
-      const sub: string[] = [];
-      for (let i = 0; i < n; i++) if (mask & (1 << i)) sub.push(arr[i]);
-      subs.push(sub);
-    }
-    return subs;
-  };
+  const getSupport = (items: string[]) => supportMap.get(buildItemsetKey(items))?.support ?? 0;
 
   const rules: RawRule[] = [];
   for (const { items, support: supAB, count } of frequentItemsets) {
     if (items.length < 2) continue;
     for (const ant of properSubsets(items)) {
-      const con = items.filter(x => !ant.includes(x));
-      if (con.length === 0) continue;
-      const supA = getSupport(ant), supB = getSupport(con);
-      if (supA === 0 || supB === 0) continue;
-      const confidence = supAB / supA;
-      if (confidence < minConfidence) continue;
-      const lift       = confidence / supB;
-      const leverage   = supAB - supA * supB;
-      const rawConv    = (1 - supB) / Math.max(1e-9, 1 - confidence);
-      const conviction = Number.isFinite(rawConv) ? rawConv : 999;
-      rules.push({ antecedent: [...ant].sort(), consequent: [...con].sort(), support: supAB, count, confidence, lift, leverage, conviction });
+      const rule = createRule(items, ant, supAB, count, getSupport, minConfidence);
+      if (rule) rules.push(rule);
     }
   }
   // Sort: lift desc → confidence desc → support desc (same as Python basis)
-  return rules.sort((a, b) => b.lift - a.lift || b.confidence - a.confidence || b.support - a.support);
+  return rules.sort(compareRulePriority);
 }
 
 // minsup=0.3 and minconf=0.5 mirrors the Python basis code defaults
@@ -251,20 +391,7 @@ const MBA_MIN_CONF = 0.5;
 
 function buildMarketBasket(orders: Order[], n = 8) {
   // ── 1) Build transactions (one list of product names per non-cancelled order)
-  const transactions: string[][] = [];
-  for (const order of orders) {
-    if (order.status === 'Cancelled') continue;
-    const seen = new Map<string, string>();
-    for (const item of order.items ?? []) {
-      const rawName = String(item.name ?? '').trim();
-      const rawId   = String(item.id   ?? '').trim();
-      const identity = rawId || rawName.toLowerCase();
-      if (!identity || !rawName) continue;
-      if (!seen.has(identity)) seen.set(identity, rawName);
-    }
-    const names = [...seen.values()];
-    if (names.length > 0) transactions.push(names);
-  }
+  const transactions = buildTransactions(orders);
   const eligibleOrders = transactions.length;
   if (eligibleOrders === 0) return { rows: [], eligibleOrders: 0 };
 
@@ -276,34 +403,10 @@ function buildMarketBasket(orders: Order[], n = 8) {
 
   // ── 4) Deduplicate symmetric rules: A→B and B→A are the same product pair.
   //       Keep the version with the highest confidence (most actionable insight).
-  const pairBest = new Map<string, RawRule>();
-  for (const rule of rules) {
-    const key = [...rule.antecedent, ...rule.consequent].sort().join('||');
-    const existing = pairBest.get(key);
-    if (!existing || rule.confidence > existing.confidence) pairBest.set(key, rule);
-  }
-  const deduped = [...pairBest.values()]
-    .sort((a, b) => b.lift - a.lift || b.confidence - a.confidence || b.count - a.count)
-    .slice(0, n);
+  const rows = dedupeSymmetricRules(rules, n).map(formatBasketRule);
 
   // ── 5) Format for display — use plain-English labels, no technical jargon
-  const shorten = (items: string[]) =>
-    items.length === 1 ? items[0] : `{${items.join(' + ')}}`;
 
-  const rows: BasketPairRow[] = deduped.map(r => ({
-    // Chart label: just "A + B" (no arrow, no technical notation)
-    pair:            `${shorten(r.antecedent)} + ${shorten(r.consequent)}`,
-    count:           r.count,
-    support:         Number((r.support    * 100).toFixed(1)),
-    confidence:      Number((r.confidence * 100).toFixed(1)),
-    lift:            Number(r.lift.toFixed(2)),
-    leverage:        Number(r.leverage.toFixed(3)),
-    conviction:      Number(Math.min(r.conviction, 99).toFixed(2)),
-    antecedentItems: r.antecedent,
-    consequentItems: r.consequent,
-    left:            shorten(r.antecedent),
-    right:           shorten(r.consequent),
-  }));
 
   return { rows, eligibleOrders };
 }
@@ -395,21 +498,10 @@ export default function AdminDashboard() {
   const [compareYear, setCompareYear] = useState(CUR_YEAR - 1);
 
   // Compute date range from filter
-  const dateRange = useMemo((): { from: string; to: string } | null => {
-    if (viewType === 'overall') return null;
-    if (viewType === 'month') {
-      const from = new Date(year, month, 1).toISOString();
-      const to   = new Date(year, month + 1, 0, 23, 59, 59).toISOString();
-      return { from, to };
-    }
-    if (viewType === 'year') {
-      return { from: new Date(year, 0, 1).toISOString(), to: new Date(year, 11, 31, 23, 59, 59).toISOString() };
-    }
-    // compare
-    const minY = Math.min(year, compareYear);
-    const maxY = Math.max(year, compareYear);
-    return { from: new Date(minY, 0, 1).toISOString(), to: new Date(maxY, 11, 31, 23, 59, 59).toISOString() };
-  }, [viewType, year, month, compareYear]);
+  const dateRange = useMemo(
+    () => buildDateRange(viewType, year, month, compareYear),
+    [viewType, year, month, compareYear],
+  );
 
   const safe = (url: string, token: string): Promise<any> =>
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })
@@ -452,19 +544,15 @@ export default function AdminDashboard() {
     }).catch(() => {});
   }, [dateRange]);
 
-  const filtered = useMemo(() => {
-    if (viewType === 'overall') return allOrders;
-    if (viewType === 'month')   return filterMonth(allOrders, year, month);
-    if (viewType === 'year')    return filterYear(allOrders, year);
-    return allOrders.filter(o => { const y = new Date(o.date).getFullYear(); return y === year || y === compareYear; });
-  }, [allOrders, viewType, year, month, compareYear]);
+  const filtered = useMemo(
+    () => filterOrdersByView(allOrders, viewType, year, month, compareYear),
+    [allOrders, viewType, year, month, compareYear],
+  );
 
-  const timeSeries = useMemo(() => {
-    if (viewType === 'overall') return buildOverall(allOrders);
-    if (viewType === 'month')   return buildDaily(allOrders, year, month);
-    if (viewType === 'year')    return buildMonthly(allOrders, year);
-    return buildCompare(allOrders, year, compareYear);
-  }, [allOrders, viewType, year, month, compareYear]);
+  const timeSeries = useMemo(
+    () => buildTimeSeries(allOrders, viewType, year, month, compareYear),
+    [allOrders, viewType, year, month, compareYear],
+  );
   const paymentData  = useMemo(() => buildPayment(filtered),       [filtered]);
   const topProducts  = useMemo(() => buildTopProducts(filtered,7), [filtered]);
   const categoryData = useMemo(() => buildCategory(filtered,6),    [filtered]);
@@ -516,7 +604,7 @@ export default function AdminDashboard() {
   const fulfillment   = Math.round((delivered / (periodOrders || 1)) * 100);
   const radialData    = [{ name: 'Fulfilled', value: fulfillment, fill: C_GREEN }, { name: 'Other', value: 100 - fulfillment, fill: '#f1f5f9' }];
   const needsAttention = (orderStats?.pendingOrders ?? 0) + (orderStats?.pendingReturns ?? 0);
-  const periodLabel   = viewType==='overall' ? 'All Time' : viewType==='month' ? `${MONTHS_LONG[month]} ${year}` : viewType==='year' ? String(year) : `${year} vs ${compareYear}`;
+  const periodLabel   = getPeriodLabel(viewType, year, month, compareYear);
   const topBasketPair = basketAnalysis.rows[0];
 
   if (loading) {

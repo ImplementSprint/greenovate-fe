@@ -20,6 +20,16 @@ type AdminProfile = {
 
 type Toast = { type: 'success' | 'error'; message: string } | null;
 
+const getAdminDisplayName = (profile: Partial<AdminProfile>) =>
+  `${profile.first_name ?? ''} ${profile.last_name ?? ''}`.trim() || profile.full_name || '';
+
+const getPasswordValidationMessage = (currentPw: string, newPw: string, confirmPw: string) => {
+  if (!currentPw || !newPw || !confirmPw) return 'All fields are required.';
+  if (newPw !== confirmPw) return 'New passwords do not match.';
+  if (newPw.length < 6) return 'New password must be at least 6 characters.';
+  return null;
+};
+
 export default function AdminProfilePage() {
   const [profile,    setProfile]    = useState<AdminProfile | null>(null);
   const [loading,    setLoading]    = useState(true);
@@ -51,6 +61,23 @@ export default function AdminProfilePage() {
       .finally(() => setLoading(false));
   }, []);
 
+  const syncProfileState = (data: AdminProfile) => {
+    setProfile(data);
+    setFirstName(data.first_name ?? '');
+    setLastName(data.last_name ?? '');
+  };
+
+  const resetNameFields = () => {
+    setFirstName(profile?.first_name ?? '');
+    setLastName(profile?.last_name ?? '');
+  };
+
+  const resetPasswordFields = () => {
+    setCurrentPw('');
+    setNewPw('');
+    setConfirmPw('');
+  };
+
   const handleSaveProfile = async () => {
     const token = getAccessToken();
     if (!token || !firstName.trim() || !lastName.trim()) return;
@@ -63,24 +90,23 @@ export default function AdminProfilePage() {
       });
       const data = await res.json();
       if (res.ok) {
-        setProfile(data);
-        setFirstName(data.first_name ?? '');
-        setLastName(data.last_name ?? '');
-        // Sync name to sidebar
-        const fullName = `${data.first_name ?? ''} ${data.last_name ?? ''}`.trim() || data.full_name || '';
+        syncProfileState(data);
+        const fullName = getAdminDisplayName(data);
         storeAdminDisplayName(fullName);
         window.dispatchEvent(new CustomEvent('admin-name-updated', { detail: fullName }));
         showToast('success', 'Profile updated successfully.');
-      }
-      else showToast('error', data?.message ?? 'Failed to update profile.');
+      } else showToast('error', data?.message ?? 'Failed to update profile.');
     } catch { showToast('error', 'Network error.'); }
     finally { setSaving(false); }
   };
 
   const handleChangePassword = async () => {
-    if (!currentPw || !newPw || !confirmPw) { showToast('error', 'All fields are required.'); return; }
-    if (newPw !== confirmPw) { showToast('error', 'New passwords do not match.'); return; }
-    if (newPw.length < 6) { showToast('error', 'New password must be at least 6 characters.'); return; }
+    const validationMessage = getPasswordValidationMessage(currentPw, newPw, confirmPw);
+    if (validationMessage) {
+      showToast('error', validationMessage);
+      return;
+    }
+
     const token = getAccessToken();
     if (!token) return;
     setChangingPw(true);
@@ -93,7 +119,7 @@ export default function AdminProfilePage() {
       const data = await res.json();
       if (res.ok) {
         showToast('success', 'Password changed successfully.');
-        setCurrentPw(''); setNewPw(''); setConfirmPw('');
+        resetPasswordFields();
       } else showToast('error', data?.message ?? data?.error ?? 'Incorrect current password.');
     } catch { showToast('error', 'Network error.'); }
     finally { setChangingPw(false); }
@@ -228,7 +254,7 @@ export default function AdminProfilePage() {
                   Save Changes
                 </button>
                 {nameChanged && (
-                  <button onClick={() => { setFirstName(profile?.first_name ?? ''); setLastName(profile?.last_name ?? ''); }}
+                  <button onClick={resetNameFields}
                     className="px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50 transition-colors">
                     Discard
                   </button>
@@ -315,7 +341,7 @@ export default function AdminProfilePage() {
                   Update Password
                 </button>
                 {(currentPw || newPw || confirmPw) && (
-                  <button onClick={() => { setCurrentPw(''); setNewPw(''); setConfirmPw(''); }}
+                  <button onClick={resetPasswordFields}
                     className="px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50 transition-colors">
                     Clear
                   </button>
