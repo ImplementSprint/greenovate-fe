@@ -96,10 +96,11 @@ export default function AdminSettingsPage() {
           <div className="p-5 space-y-5">
             {/* Delivery Fee */}
             <div>
-              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Delivery Fee</label>
+              <label htmlFor="delivery-fee" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Delivery Fee</label>
               <div className="relative">
                 <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">₱</span>
                 <input
+                  id="delivery-fee"
                   type="number"
                   value={settings['delivery_fee'] ?? ''}
                   onChange={e => set('delivery_fee', e.target.value)}
@@ -111,10 +112,11 @@ export default function AdminSettingsPage() {
 
             {/* Free Delivery Min */}
             <div>
-              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Free Delivery Minimum</label>
+              <label htmlFor="free-delivery-min" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Free Delivery Minimum</label>
               <div className="relative">
                 <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">₱</span>
                 <input
+                  id="free-delivery-min"
                   type="number"
                   value={settings['free_delivery_min'] ?? ''}
                   onChange={e => set('free_delivery_min', e.target.value)}
@@ -126,7 +128,7 @@ export default function AdminSettingsPage() {
 
             {/* Preview pill */}
             <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
-              <span className="font-bold">Preview: </span>
+              <span className="font-bold">Preview: </span>{' '}
               Orders under <span className="font-black">₱{settings['free_delivery_min'] ?? '500'}</span> pay a{' '}
               <span className="font-black">₱{settings['delivery_fee'] ?? '50'}</span> delivery fee.
             </div>
@@ -147,10 +149,11 @@ export default function AdminSettingsPage() {
           <div className="p-5 space-y-5">
             {/* Min order */}
             <div>
-              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Minimum Order Amount</label>
+              <label htmlFor="minimum-order-amount" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Minimum Order Amount</label>
               <div className="relative">
                 <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">₱</span>
                 <input
+                  id="minimum-order-amount"
                   type="number"
                   value={settings['min_order_amount'] ?? ''}
                   onChange={e => set('min_order_amount', e.target.value)}
@@ -162,9 +165,10 @@ export default function AdminSettingsPage() {
 
             {/* Max items */}
             <div>
-              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Max Items Per Order</label>
+              <label htmlFor="max-items-per-order" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Max Items Per Order</label>
               <div className="relative">
                 <input
+                  id="max-items-per-order"
                   type="number"
                   value={settings['max_order_items'] ?? ''}
                   onChange={e => set('max_order_items', e.target.value)}
@@ -191,8 +195,9 @@ export default function AdminSettingsPage() {
           </div>
           <div className="p-5 grid sm:grid-cols-2 gap-5">
             <div>
-              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Support Email</label>
+              <label htmlFor="support-email" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Support Email</label>
               <input
+                id="support-email"
                 type="email"
                 value={settings['contact_email'] ?? ''}
                 onChange={e => set('contact_email', e.target.value)}
@@ -202,8 +207,9 @@ export default function AdminSettingsPage() {
               <p className="text-xs text-slate-400 mt-1.5">Displayed on order confirmation emails</p>
             </div>
             <div>
-              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Support Phone</label>
+              <label htmlFor="support-phone" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Support Phone</label>
               <input
+                id="support-phone"
                 type="text"
                 value={settings['contact_phone'] ?? ''}
                 onChange={e => set('contact_phone', e.target.value)}

@@ -14,6 +14,14 @@ type Product = {
   image?: string;
 };
 
+const getStockClassName = (stock: number) => {
+  if (stock <= 0) return 'text-red-500';
+  if (stock <= 5) return 'text-amber-500';
+  return 'text-green-600';
+};
+
+const getStockLabel = (stock: number) => (stock <= 0 ? 'Out of stock' : `${stock} left`);
+
 export default function AdminProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,11 +69,13 @@ export default function AdminProductsPage() {
           <span className="text-xs text-slate-400">{filtered.length} products</span>
         </div>
 
-        {loading ? (
+        {loading && (
           <div className="flex items-center justify-center h-40"><Loader2 className="w-6 h-6 animate-spin text-blue-600" /></div>
-        ) : filtered.length === 0 ? (
+        )}
+        {!loading && filtered.length === 0 && (
           <div className="p-10 text-center text-slate-400 text-sm">No products found.</div>
-        ) : (
+        )}
+        {!loading && filtered.length > 0 && (
           <div className="divide-y divide-slate-50">
             {filtered.map(p => (
               <div key={p.id} className="px-6 py-3 flex items-center gap-4">
@@ -81,8 +91,8 @@ export default function AdminProductsPage() {
                 <div className="text-right shrink-0">
                   <p className="text-sm font-bold text-slate-900">₱{Number(p.price).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</p>
                   {typeof p.stock === 'number' && (
-                    <p className={`text-xs font-medium ${p.stock <= 0 ? 'text-red-500' : p.stock <= 5 ? 'text-amber-500' : 'text-green-600'}`}>
-                      {p.stock <= 0 ? 'Out of stock' : `${p.stock} left`}
+                    <p className={`text-xs font-medium ${getStockClassName(p.stock)}`}>
+                      {getStockLabel(p.stock)}
                     </p>
                   )}
                 </div>
