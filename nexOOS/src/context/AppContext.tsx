@@ -10,6 +10,15 @@ import {
   getAccessToken,
 } from '@/lib/auth-client';
 import { buildApiUrl, fetchJsonWithRetry } from '@/lib/api';
+import {
+  areCartItemsEqual,
+  cartSnapshot,
+  getMaxCartQuantity,
+  mergeCartItems,
+  sanitizeCartItems,
+} from '@/lib/cart-utils';
+import { fetchInterestRows, mapInterestRows } from '@/lib/interest-utils';
+import { normalizeOrderPayload } from '@/lib/order-normalizer';
 
 type AccountSubView = 'profile' | 'addresses' | 'orders' | 'settings' | 'returns';
 
@@ -66,185 +75,6 @@ const INACTIVITY_EVENTS: Array<keyof WindowEventMap> = [
   'touchstart',
   'click',
 ];
-
-const areCartItemsEqual = (left: CartItem[], right: CartItem[]) => {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((item, index) => {
-    const other = right[index];
-
-    return (
-      item.id === other?.id &&
-      item.quantity === other?.quantity
-    );
-  });
-};
-
-const getMaxCartQuantity = (item: Pick<CartItem, 'stock'>) => {
-  if (
-    typeof item.stock === 'number' &&
-    Number.isFinite(item.stock) &&
-    item.stock > 0
-  ) {
-    return Math.max(1, Math.trunc(item.stock));
-  }
-
-  return null;
-};
-
-const clampCartItemQuantity = (item: CartItem) => {
-  const maxQuantity = getMaxCartQuantity(item);
-
-  return {
-    ...item,
-    quantity:
-      maxQuantity === null
-        ? Math.max(1, Math.trunc(item.quantity))
-        : Math.min(Math.max(1, Math.trunc(item.quantity)), maxQuantity),
-  };
-};
-
-const sanitizeCartItems = (items: CartItem[]) =>
-  items
-    .map((item) => clampCartItemQuantity(item))
-    .filter((item) => item.quantity > 0);
-
-const mergeCartItems = (localItems: CartItem[], remoteItems: CartItem[]) => {
-  const merged = new Map<string, CartItem>();
-
-  for (const item of remoteItems) {
-    merged.set(item.id, { ...item });
-  }
-
-  for (const item of localItems) {
-    const existing = merged.get(item.id);
-
-    if (existing) {
-      merged.set(item.id, {
-        ...existing,
-        // Prefer the larger quantity when the same product already exists in
-        // both guest and remote carts so repeated dev-mode hydration does not
-        // keep inflating the count for one logical cart item.
-        quantity: Math.max(existing.quantity, item.quantity),
-      });
-      continue;
-    }
-
-    merged.set(item.id, { ...item });
-  }
-
-  return sanitizeCartItems(Array.from(merged.values()));
-};
-
-const cartSnapshot = (items: CartItem[]) =>
-  items
-    .map((item) => `${item.id}:${item.quantity}`)
-    .sort((left, right) => left.localeCompare(right))
-    .join('|');
-
-const ORDER_ITEM_PLACEHOLDER_IMAGE =
-  "data:image/svg+xml;utf8," +
-  encodeURIComponent(
-    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'>" +
-      "<rect width='96' height='96' rx='24' fill='#e2e8f0'/>" +
-      "<rect x='22' y='26' width='52' height='44' rx='14' fill='#94a3b8'/>" +
-      "<circle cx='48' cy='48' r='12' fill='#f8fafc'/>" +
-    "</svg>",
-  );
-
-const getOrderRowId = (row: Record<string, unknown>, index: number) =>
-  typeof row.id === 'string' ? row.id : `order-${index}`;
-
-const getOrderItemId = (entry: Record<string, unknown>, orderId: string, itemIndex: number) =>
-  typeof entry.id === 'string' ? entry.id : `${orderId}-item-${itemIndex}`;
-
-const normalizeOrderPayload = (payload: unknown): Order[] => {
-  if (!Array.isArray(payload)) {
-    return [];
-  }
-
-  return payload.map((order, index) => {
-    const row = typeof order === 'object' && order !== null
-      ? (order as Record<string, unknown>)
-      : {};
-    const items = Array.isArray(row.items) ? row.items : [];
-    const orderId = getOrderRowId(row, index);
-
-    return {
-      id: orderId,
-      receiptNumber:
-        typeof row.receiptNumber === 'string' ? row.receiptNumber : undefined,
-      orderNumber:
-        typeof row.orderNumber === 'string' ? row.orderNumber : undefined,
-      txNo: typeof row.txNo === 'string' ? row.txNo : undefined,
-      date:
-        typeof row.date === 'string'
-          ? row.date
-          : new Date().toISOString(),
-      items: items.map((item, itemIndex) => {
-        const entry = typeof item === 'object' && item !== null
-          ? (item as Record<string, unknown>)
-          : {};
-
-        return {
-          id: getOrderItemId(entry, orderId, itemIndex),
-          name: typeof entry.name === 'string' ? entry.name : 'Ordered item',
-          description:
-            typeof entry.description === 'string' ? entry.description : '',
-          price: Number(entry.price ?? 0),
-          category:
-            typeof entry.category === 'string'
-              ? entry.category
-              : 'Uncategorized',
-          image:
-            typeof entry.image === 'string' && entry.image.trim()
-              ? entry.image
-              : ORDER_ITEM_PLACEHOLDER_IMAGE,
-          quantity: Math.max(1, Number(entry.quantity ?? 1)),
-        };
-      }),
-      subtotal: Number(row.subtotal ?? 0),
-      deliveryFee: Number(row.deliveryFee ?? 0),
-      discountAmount: Number(row.discountAmount ?? 0),
-      promoCode: typeof row.promoCode === 'string' ? row.promoCode : undefined,
-      total: Number(row.total ?? 0),
-      status:
-        row.status === 'Processing' ||
-        row.status === 'In Transit' ||
-        row.status === 'Delivered' ||
-        row.status === 'Cancelled'
-          ? row.status
-          : 'Processing',
-      shippingAddress:
-        typeof row.shippingAddress === 'string' ? row.shippingAddress : '',
-      paymentMethod:
-        typeof row.paymentMethod === 'string' ? row.paymentMethod : '',
-    };
-  });
-};
-
-const fetchInterestRows = async <TRow,>(
-  endpoint: string,
-  token: string,
-): Promise<TRow[]> => {
-  const response = await fetch(endpoint, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const payload = response.ok ? await response.json() : { data: [] };
-  return (payload?.data ?? []) as TRow[];
-};
-
-const mapInterestRows = <TRow,>(
-  rows: TRow[],
-  getKey: (row: TRow) => string,
-  getValue: (row: TRow) => number,
-) => {
-  const mapped = new Map<string, number>();
-  rows.forEach((row) => mapped.set(getKey(row), getValue(row)));
-  return mapped;
-};
 
 export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [view, setView] = useState('home');
