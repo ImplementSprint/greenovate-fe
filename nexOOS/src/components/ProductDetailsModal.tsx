@@ -7,18 +7,8 @@ import { useAppContext } from '../context/AppContext';
 import { Product } from '../types';
 import { fetchJsonWithRetry } from '@/lib/api';
 import { getAccessToken } from '@/lib/auth-client';
+import { getAvailableStock, normalizeProducts } from '@/lib/product-utils';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
-
-const getAvailableStock = (
-  selectedStock: number | undefined,
-  fallbackStock: number | undefined
-) => {
-  if (typeof selectedStock === 'number') {
-    return selectedStock;
-  }
-
-  return fallbackStock ?? 0;
-};
 
 const renderStockAvailability = (
   selectedBranch: unknown,
@@ -50,25 +40,53 @@ const renderStockAvailability = (
   );
 };
 
-const normalizeProducts = (products: Product[]) => {
-  const seen = new Set<string>();
-
-  return products.filter((product) => {
-    const signature = [
-      product.id?.trim() || 'missing-id',
-      product.name?.trim() || 'missing-name',
-      product.category?.trim() || 'missing-category',
-      String(product.price ?? ''),
-    ].join('|');
-
-    if (seen.has(signature)) {
-      return false;
-    }
-
-    seen.add(signature);
-    return true;
-  });
-};
+function ProductSuggestionCard({
+  product,
+  idx,
+  label,
+  labelClassName,
+  isOutOfStock,
+  onSelect,
+}: Readonly<{
+  product: Product;
+  idx: number;
+  label: string;
+  labelClassName: string;
+  isOutOfStock: boolean;
+  onSelect: (product: Product) => void;
+}>) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: idx * 0.05 }}
+      className="group overflow-hidden rounded-[1.5rem] border border-blue-100 bg-white shadow-sm transition-all hover:-translate-y-1 hover:shadow-xl"
+    >
+      <button type="button" onClick={() => onSelect(product)} className="block w-full text-left">
+        <div className="aspect-square overflow-hidden bg-slate-50">
+          <img
+            src={product.image}
+            alt={product.name}
+            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+        <div className="p-4">
+          <span className={`mb-2 inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wider ${labelClassName}`}>
+            {label}
+          </span>
+          <h4 className="line-clamp-2 min-h-[2.8rem] text-sm font-black tracking-tight text-slate-900">
+            {product.name}
+          </h4>
+          <p className="mt-1 text-lg font-black text-slate-900">PHP {product.price.toFixed(2)}</p>
+          <p className={`mt-2 text-xs font-bold ${isOutOfStock ? 'text-red-500' : 'text-slate-500'}`}>
+            {isOutOfStock ? 'Out of stock in this branch' : 'Tap to view details'}
+          </p>
+        </div>
+      </button>
+    </motion.div>
+  );
+}
 
 export default function ProductDetailsModal() {
   const {
@@ -379,31 +397,16 @@ export default function ProductDetailsModal() {
                       {recommendations.map((product, idx) => {
                         const invItem = selectedBranch ? branchInventory.find((inv) => inv.product_id === product.id) : null;
                         const recStock = getAvailableStock(product.stock, invItem?.stock);
-                        const outOfStock = Boolean(selectedBranch && recStock === 0);
                         return (
-                          <motion.div
+                          <ProductSuggestionCard
                             key={`rec-${product.id}-${idx}`}
-                            initial={{ opacity: 0, y: 16 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: idx * 0.05 }}
-                            className="group overflow-hidden rounded-[1.5rem] border border-blue-100 bg-white shadow-sm transition-all hover:-translate-y-1 hover:shadow-xl"
-                          >
-                            <button type="button" onClick={() => setSelectedProduct(product)} className="block w-full text-left">
-                              <div className="aspect-square overflow-hidden bg-slate-50">
-                                <img src={product.image} alt={product.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" referrerPolicy="no-referrer" />
-                              </div>
-                              <div className="p-4">
-                                <span className="mb-2 inline-flex rounded-full bg-green-50 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-green-600">
-                                  Often paired
-                                </span>
-                                <h4 className="line-clamp-2 min-h-[2.8rem] text-sm font-black tracking-tight text-slate-900">{product.name}</h4>
-                                <p className="mt-1 text-lg font-black text-slate-900">PHP {product.price.toFixed(2)}</p>
-                                <p className={`mt-2 text-xs font-bold ${outOfStock ? 'text-red-500' : 'text-slate-500'}`}>
-                                  {outOfStock ? 'Out of stock in this branch' : 'Tap to view details'}
-                                </p>
-                              </div>
-                            </button>
-                          </motion.div>
+                            product={product}
+                            idx={idx}
+                            label="Often paired"
+                            labelClassName="bg-green-50 text-green-600"
+                            isOutOfStock={Boolean(selectedBranch && recStock === 0)}
+                            onSelect={setSelectedProduct}
+                          />
                         );
                       })}
                     </div>
@@ -446,45 +449,17 @@ export default function ProductDetailsModal() {
                         ? branchInventory.find((inv) => inv.product_id === product.id)
                         : null;
                       const relatedStock = getAvailableStock(product.stock, relatedInventoryItem?.stock);
-                      const isOutOfStock = Boolean(selectedBranch && relatedStock === 0);
 
                       return (
-                        <motion.div
+                        <ProductSuggestionCard
                           key={`${product.id}-${product.name}-${idx}`}
-                          initial={{ opacity: 0, y: 16 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: idx * 0.05 }}
-                          className="group overflow-hidden rounded-[1.5rem] border border-slate-100 bg-white shadow-sm transition-all hover:-translate-y-1 hover:shadow-xl"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => setSelectedProduct(product)}
-                            className="block w-full text-left"
-                          >
-                            <div className="aspect-square overflow-hidden bg-slate-50">
-                              <img
-                                src={product.image}
-                                alt={product.name}
-                                className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                referrerPolicy="no-referrer"
-                              />
-                            </div>
-                            <div className="p-4">
-                              <span className="mb-2 inline-flex rounded-full bg-blue-50 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-blue-600">
-                                {product.category}
-                              </span>
-                              <h4 className="line-clamp-2 min-h-[2.8rem] text-sm font-black tracking-tight text-slate-900">
-                                {product.name}
-                              </h4>
-                              <p className="mt-1 text-lg font-black text-slate-900">
-                                PHP {product.price.toFixed(2)}
-                              </p>
-                              <p className={`mt-2 text-xs font-bold ${isOutOfStock ? 'text-red-500' : 'text-slate-500'}`}>
-                                {isOutOfStock ? 'Out of stock in this branch' : 'Tap to view details'}
-                              </p>
-                            </div>
-                          </button>
-                        </motion.div>
+                          product={product}
+                          idx={idx}
+                          label={product.category}
+                          labelClassName="bg-blue-50 text-blue-600"
+                          isOutOfStock={Boolean(selectedBranch && relatedStock === 0)}
+                          onSelect={setSelectedProduct}
+                        />
                       );
                     })}
                   </div>

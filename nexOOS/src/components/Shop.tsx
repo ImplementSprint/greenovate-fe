@@ -16,6 +16,13 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { buildApiUrl, fetchJsonWithRetry } from '@/lib/api';
+import {
+  getAvailableCategories,
+  getProductRenderKey,
+  getProductStock,
+  normalizeProducts,
+  rankForYouProducts,
+} from '@/lib/product-utils';
 import { Branch, Product } from '../types';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
@@ -27,25 +34,6 @@ const SORT_OPTIONS = [
 ] as const;
 
 type SortOption = (typeof SORT_OPTIONS)[number]['value'];
-
-const compareLabels = (left: string, right: string) => left.localeCompare(right);
-const getProductScore = (
-  product: Product,
-  interestMap: Map<string, number>,
-  categoryInterestMap: Map<string, number>,
-) =>
-  ((categoryInterestMap.get(product.category) ?? 0) * 100) +
-  ((interestMap.get(product.id) ?? 0) * 10) +
-  (product.sold ?? 0);
-
-const rankForYouProducts = (
-  products: Product[],
-  interestMap: Map<string, number>,
-  categoryInterestMap: Map<string, number>,
-) => [...products].sort((left, right) =>
-  getProductScore(right, interestMap, categoryInterestMap) -
-  getProductScore(left, interestMap, categoryInterestMap),
-);
 
 const buildProductQueryParams = ({
   searchQuery,
@@ -81,19 +69,6 @@ const buildProductQueryParams = ({
 
 const shouldShowDynamicCategories = (searchQuery: string, hasCategoryFilter: boolean) =>
   !searchQuery.trim() && !hasCategoryFilter;
-
-const getAvailableCategories = (products: Product[]) => [
-  'All',
-  ...Array.from(new Set(products.map((product) => product.category).filter(Boolean))).sort(compareLabels),
-];
-
-const getProductStock = (product: Product, inventoryStock?: number) => {
-  if (typeof product.stock === 'number') {
-    return product.stock;
-  }
-
-  return inventoryStock ?? 0;
-};
 
 function ProductStockBadge({
   selectedBranch,
@@ -140,34 +115,6 @@ const getPaginationButtonClassName = (isCurrentPage: boolean) =>
       ? 'bg-blue-600 text-white shadow-lg shadow-blue-100'
       : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
   }`;
-
-const normalizeProducts = (products: Product[]) => {
-  const seen = new Set<string>();
-
-  return products.filter((product) => {
-    const signature = [
-      product.id?.trim() || 'missing-id',
-      product.name?.trim() || 'missing-name',
-      product.category?.trim() || 'missing-category',
-      String(product.price ?? ''),
-    ].join('|');
-
-    if (seen.has(signature)) {
-      return false;
-    }
-
-    seen.add(signature);
-    return true;
-  });
-};
-
-const getProductRenderKey = (product: Product, idx: number) =>
-  [
-    product.id?.trim() || 'missing-id',
-    product.name?.trim() || 'missing-name',
-    product.category?.trim() || 'missing-category',
-    idx,
-  ].join('|');
 
 const getApiSortByValue = (sortBy: SortOption) =>
   sortBy === 'for-you' || sortBy === 'top-sold' ? 'popularity' : sortBy;
