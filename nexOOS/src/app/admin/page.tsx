@@ -134,19 +134,43 @@ function buildCompare(orders: Order[], yA: number, yB: number) {
 
 function buildPayment(orders: Order[]) {
   const m: Record<string, number> = {};
-  for (const o of orders) { if (o.status === 'Cancelled') continue; const k = o.paymentMethod || 'Unknown'; m[k] = (m[k] ?? 0) + 1; }
+  for (const o of orders) {
+    if (o.status === 'Cancelled') {
+      continue;
+    }
+
+    const k = o.paymentMethod || 'Unknown';
+    m[k] = (m[k] ?? 0) + 1;
+  }
   return Object.entries(m).map(([name, value]) => ({ name, value }));
 }
 
 function buildTopProducts(orders: Order[], n = 7) {
   const m: Record<string, number> = {};
-  for (const o of orders) { if (o.status === 'Cancelled') continue; for (const i of o.items ?? []) m[i.name] = (m[i.name] ?? 0) + i.quantity; }
+  for (const o of orders) {
+    if (o.status === 'Cancelled') {
+      continue;
+    }
+
+    for (const i of o.items ?? []) {
+      m[i.name] = (m[i.name] ?? 0) + i.quantity;
+    }
+  }
   return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, n).map(([name, qty]) => ({ name: name.length > 22 ? name.slice(0, 20) + '…' : name, qty }));
 }
 
 function buildCategory(orders: Order[], n = 6) {
   const m: Record<string, number> = {};
-  for (const o of orders) { if (o.status === 'Cancelled') continue; for (const i of o.items ?? []) { const c = i.category || 'Other'; m[c] = (m[c] ?? 0) + i.price * i.quantity; } }
+  for (const o of orders) {
+    if (o.status === 'Cancelled') {
+      continue;
+    }
+
+    for (const i of o.items ?? []) {
+      const c = i.category || 'Other';
+      m[c] = (m[c] ?? 0) + i.price * i.quantity;
+    }
+  }
   return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, n).map(([name, value]) => ({ name, value: Math.round(value) }));
 }
 
@@ -555,6 +579,16 @@ const getAxisFontSize = (viewType: ViewType) => (viewType === 'month' ? 10 : 11)
 const getAxisInterval = (viewType: ViewType) => (viewType === 'month' ? 4 : 0);
 const getOrderCountLabel = (count: number) => (count === 1 ? 'order' : 'orders');
 const getTimeCountLabel = (count: number) => (count === 1 ? 'time' : 'times');
+const getAlternatingOrderFill = (label: string) => (Number(label) % 2 === 1 ? C_INDIGO : '#818cf8');
+const getTopProductFill = (_name: string, index: number) => {
+  if (index === 0) return C_GREEN;
+  return index < 3 ? '#22c55e99' : '#86efac';
+};
+const getCategoryFill = (_name: string, index: number) => CHART_PAL[index % CHART_PAL.length];
+const getBasketBarFill = (_pair: string, index: number) => {
+  if (index === 0) return C_BLUE;
+  return index < 3 ? '#60a5fa' : '#bfdbfe';
+};
 
 function DashboardLoading() {
   return (
@@ -972,8 +1006,8 @@ export default function AdminDashboard() {
                   <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <Tooltip {...TT} formatter={(v: unknown) => [String(v), 'Orders']} />
                   <Bar dataKey="orders" fill={C_INDIGO} radius={[4, 4, 0, 0]}>
-                    {(timeSeries as { label: string; orders?: number }[]).map((_, i) => (
-                      <Cell key={i} fill={i % 2 === 0 ? C_INDIGO : '#818cf8'} />
+                    {(timeSeries as { label: string; orders?: number }[]).map((row) => (
+                      <Cell key={row.label} fill={getAlternatingOrderFill(row.label)} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -989,7 +1023,7 @@ export default function AdminDashboard() {
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
                   <Pie data={statusData} cx="50%" cy="50%" innerRadius={50} outerRadius={76} paddingAngle={3} dataKey="value">
-                    {statusData.map((e, i) => <Cell key={i} fill={e.fill} />)}
+                    {statusData.map((e) => <Cell key={e.name} fill={e.fill} />)}
                   </Pie>
                   <Tooltip {...TT} />
                   <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
@@ -1003,7 +1037,7 @@ export default function AdminDashboard() {
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
                   <Pie data={paymentData} cx="50%" cy="50%" outerRadius={76} paddingAngle={3} dataKey="value">
-                    {paymentData.map((_, i) => <Cell key={i} fill={CHART_PAL[i % CHART_PAL.length]} />)}
+                    {paymentData.map((entry, index) => <Cell key={entry.name} fill={getCategoryFill(entry.name, index)} />)}
                   </Pie>
                   <Tooltip {...TT} />
                   <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
@@ -1041,8 +1075,8 @@ export default function AdminDashboard() {
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={115} />
                   <Tooltip {...TT} formatter={(v: unknown) => [String(v), 'Units']} />
                   <Bar dataKey="qty" radius={[0, 5, 5, 0]}>
-                    {topProducts.map((_, i) => (
-                      <Cell key={i} fill={i === 0 ? C_GREEN : i < 3 ? '#22c55e99' : '#86efac'} />
+                    {topProducts.map((entry, index) => (
+                      <Cell key={entry.name} fill={getTopProductFill(entry.name, index)} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -1059,7 +1093,7 @@ export default function AdminDashboard() {
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={90} />
                   <Tooltip {...TT} formatter={(v: unknown) => [fmt(asNumber(v)), 'Revenue']} />
                   <Bar dataKey="value" radius={[0, 5, 5, 0]}>
-                    {categoryData.map((_, i) => <Cell key={i} fill={CHART_PAL[i % CHART_PAL.length]} />)}
+                    {categoryData.map((entry, index) => <Cell key={entry.name} fill={getCategoryFill(entry.name, index)} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -1096,8 +1130,8 @@ export default function AdminDashboard() {
                       }}
                     />
                     <Bar dataKey="count" barSize={28} radius={[0, 6, 6, 0]}>
-                      {basketAnalysis.rows.slice(0,6).map((_, i) => (
-                        <Cell key={i} fill={i === 0 ? C_BLUE : i < 3 ? '#60a5fa' : '#bfdbfe'} />
+                      {basketAnalysis.rows.slice(0,6).map((row, index) => (
+                        <Cell key={row.pair} fill={getBasketBarFill(row.pair, index)} />
                       ))}
                     </Bar>
                   </BarChart>
@@ -1156,8 +1190,8 @@ export default function AdminDashboard() {
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
                   <Pie data={returnStatusData} cx="50%" cy="50%" innerRadius={50} outerRadius={76} paddingAngle={3} dataKey="value">
-                    {returnStatusData.map((e, i) => (
-                      <Cell key={i} fill={getReturnStatusFill(e.name)} />
+                    {returnStatusData.map((e) => (
+                      <Cell key={e.name} fill={getReturnStatusFill(e.name)} />
                     ))}
                   </Pie>
                   <Tooltip {...TT} />

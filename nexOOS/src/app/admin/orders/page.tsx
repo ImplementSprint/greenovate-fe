@@ -79,6 +79,8 @@ function summaryCardClass(status: string) {
   return map[status] ?? 'bg-slate-100 text-slate-700 ring-1 ring-slate-200';
 }
 
+const getItemCountLabel = (count: number) => (count === 1 ? 'item' : 'items');
+
 // ─── Cancel reason modal ──────────────────────────────────────────────────────
 const CANCEL_REASONS = [
   'Out of stock',
@@ -105,7 +107,12 @@ function CancelReasonModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <button
+        type="button"
+        aria-label="Close cancel order modal"
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
+      />
       <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 z-10">
         {/* Header */}
         <div className="flex items-start justify-between mb-5">
@@ -363,11 +370,12 @@ export default function AdminOrdersPage() {
           </div>
         </div>
 
-        {loading ? (
+        {loading && (
           <div className="flex h-56 items-center justify-center">
             <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
           </div>
-        ) : orders.length === 0 ? (
+        )}
+        {!loading && orders.length === 0 && (
           <div className="p-12 text-center">
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
               <Package className="h-6 w-6" />
@@ -375,7 +383,8 @@ export default function AdminOrdersPage() {
             <h3 className="text-base font-bold text-slate-900">No orders found</h3>
             <p className="mt-1 text-sm text-slate-500">Try changing the search or status filter.</p>
           </div>
-        ) : (
+        )}
+        {!loading && orders.length > 0 && (
           <div className="divide-y divide-slate-100">
             {orders.map(order => {
               const orderLabel = order.receiptNumber ?? order.orderNumber ?? order.id.slice(0, 8);
@@ -421,7 +430,7 @@ export default function AdminOrdersPage() {
 
                           <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                             <div className="flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
-                              <span className="rounded-full bg-slate-100 px-3 py-1.5">{order.items.length} item{order.items.length === 1 ? '' : 's'}</span>
+                              <span className="rounded-full bg-slate-100 px-3 py-1.5">{order.items.length} {getItemCountLabel(order.items.length)}</span>
                               <span className="rounded-full bg-slate-100 px-3 py-1.5">{order.paymentMethod || 'Unknown payment'}</span>
                             </div>
 

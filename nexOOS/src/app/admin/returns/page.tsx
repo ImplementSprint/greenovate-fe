@@ -75,6 +75,20 @@ function summaryCardClass(status: string) {
   return map[status] ?? 'bg-slate-100 text-slate-700 ring-1 ring-slate-200';
 }
 
+const REQUIRES_NOTE = new Set(['approved', 'rejected']);
+
+const getDecisionButtonClass = (status: string) => {
+  if (status === 'approved') {
+    return 'bg-green-600 text-white hover:bg-green-700';
+  }
+
+  if (status === 'rejected') {
+    return 'bg-red-600 text-white hover:bg-red-700';
+  }
+
+  return 'bg-blue-600 text-white hover:bg-blue-700';
+};
+
 export default function AdminReturnsPage() {
   const [returns, setReturns] = useState<ReturnRequest[]>([]);
   const [total, setTotal] = useState(0);
@@ -110,13 +124,11 @@ export default function AdminReturnsPage() {
     fetchReturns();
   }, [fetchReturns]);
 
-  const REQUIRES_NOTE = ['approved', 'rejected'];
-
   const updateStatus = async (id: string, newStatus: string) => {
     const note = adminNote[id]?.trim() ?? '';
 
     // Require admin note for approve/reject decisions
-    if (REQUIRES_NOTE.includes(newStatus) && !note) {
+    if (REQUIRES_NOTE.has(newStatus) && !note) {
       setNoteError(prev => ({ ...prev, [id]: true }));
       setExpanded(id); // force expand so user sees the textarea
       return;
@@ -260,11 +272,12 @@ export default function AdminReturnsPage() {
           </div>
         </div>
 
-        {loading ? (
+        {loading && (
           <div className="flex h-56 items-center justify-center">
             <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
           </div>
-        ) : returns.length === 0 ? (
+        )}
+        {!loading && returns.length === 0 && (
           <div className="p-12 text-center">
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
               <RotateCcw className="h-6 w-6" />
@@ -272,7 +285,8 @@ export default function AdminReturnsPage() {
             <h3 className="text-base font-bold text-slate-900">No return requests found</h3>
             <p className="mt-1 text-sm text-slate-500">Try another filter or check back after new submissions arrive.</p>
           </div>
-        ) : (
+        )}
+        {!loading && returns.length > 0 && (
           <div className="divide-y divide-slate-100">
             {returns.map(request => {
               const quickStatuses = QUICK_TRANSITIONS[request.status] ?? [];
@@ -417,16 +431,10 @@ export default function AdminReturnsPage() {
                           {nextStatuses.length > 0 && (
                             <div className="mt-4 flex flex-wrap gap-2">
                               {nextStatuses.map(status => {
-                                const requiresNote = status === 'approved' || status === 'rejected';
+                                const requiresNote = REQUIRES_NOTE.has(status);
                                 const currentNote = (adminNote[request.id] ?? request.admin_note ?? '').trim();
                                 const isDisabled = updating === request.id || (requiresNote && !currentNote);
-
-                                const buttonClass =
-                                  status === 'approved'
-                                    ? 'bg-green-600 text-white hover:bg-green-700'
-                                    : status === 'rejected'
-                                      ? 'bg-red-600 text-white hover:bg-red-700'
-                                      : 'bg-blue-600 text-white hover:bg-blue-700';
+                                const buttonClass = getDecisionButtonClass(status);
 
                                 return (
                                   <button

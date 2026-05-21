@@ -41,6 +41,16 @@ const getProfileInitials = (profile: AdminProfile | null) => {
 const didProfileNameChange = (profile: AdminProfile | null, firstName: string, lastName: string) =>
   firstName.trim() !== (profile?.first_name ?? '') || lastName.trim() !== (profile?.last_name ?? '');
 
+const getPasswordInputClassName = (confirmPw: string, newPw: string) => {
+  if (!confirmPw || !newPw) {
+    return 'border-slate-200 focus:border-blue-400 focus:ring-blue-400/20';
+  }
+
+  return newPw === confirmPw
+    ? 'border-green-400 focus:ring-green-400/20'
+    : 'border-red-300 focus:ring-red-400/20';
+};
+
 const getProfileFields = (profile: AdminProfile | null): ProfileField[] => [
   { icon: Hash, label: 'Staff ID', value: profile?.staff_number ?? '—' },
   { icon: User, label: 'Username', value: profile?.username ? `@${profile.username}` : '—' },
@@ -260,8 +270,9 @@ export default function AdminProfilePage() {
             <div className="px-6 py-5">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">First Name</label>
+                  <label htmlFor="admin-first-name" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">First Name</label>
                   <input
+                    id="admin-first-name"
                     type="text"
                     value={firstName}
                     onChange={e => setFirstName(e.target.value)}
@@ -270,8 +281,9 @@ export default function AdminProfilePage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Last Name</label>
+                  <label htmlFor="admin-last-name" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Last Name</label>
                   <input
+                    id="admin-last-name"
                     type="text"
                     value={lastName}
                     onChange={e => setLastName(e.target.value)}
@@ -316,9 +328,9 @@ export default function AdminProfilePage() {
               <div className="grid sm:grid-cols-1 gap-4">
                 {/* Current */}
                 <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Current Password</label>
+                  <label htmlFor="admin-current-password" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Current Password</label>
                   <div className="relative">
-                    <input type={showCurrent ? 'text' : 'password'} value={currentPw} onChange={e => setCurrentPw(e.target.value)}
+                    <input id="admin-current-password" type={showCurrent ? 'text' : 'password'} value={currentPw} onChange={e => setCurrentPw(e.target.value)}
                       placeholder="••••••••"
                       className="w-full px-4 py-3 pr-11 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 transition-colors" />
                     <button onClick={() => setShowCurrent(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
@@ -330,9 +342,9 @@ export default function AdminProfilePage() {
                 {/* New + Confirm side by side */}
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">New Password</label>
+                    <label htmlFor="admin-new-password" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">New Password</label>
                     <div className="relative">
-                      <input type={showNew ? 'text' : 'password'} value={newPw} onChange={e => setNewPw(e.target.value)}
+                      <input id="admin-new-password" type={showNew ? 'text' : 'password'} value={newPw} onChange={e => setNewPw(e.target.value)}
                         placeholder="••••••••"
                         className="w-full px-4 py-3 pr-11 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 transition-colors" />
                       <button onClick={() => setShowNew(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
@@ -341,17 +353,11 @@ export default function AdminProfilePage() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Confirm New Password</label>
+                    <label htmlFor="admin-confirm-password" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Confirm New Password</label>
                     <div className="relative">
-                      <input type={showConfirm ? 'text' : 'password'} value={confirmPw} onChange={e => setConfirmPw(e.target.value)}
+                      <input id="admin-confirm-password" type={showConfirm ? 'text' : 'password'} value={confirmPw} onChange={e => setConfirmPw(e.target.value)}
                         placeholder="••••••••"
-                        className={`w-full px-4 py-3 pr-11 bg-slate-50 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-colors ${
-                          confirmPw && newPw
-                            ? newPw === confirmPw
-                              ? 'border-green-400 focus:ring-green-400/20'
-                              : 'border-red-300 focus:ring-red-400/20'
-                            : 'border-slate-200 focus:border-blue-400 focus:ring-blue-400/20'
-                        }`} />
+                        className={`w-full px-4 py-3 pr-11 bg-slate-50 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-colors ${getPasswordInputClassName(confirmPw, newPw)}`} />
                       <button onClick={() => setShowConfirm(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
                         {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
