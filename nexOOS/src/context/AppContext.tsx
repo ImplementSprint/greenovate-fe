@@ -3,64 +3,12 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Product, Branch, BranchInventory, Order, CartItem, User } from '../types';
-import {
-  clearAccessToken,
-  fetchWithAuth,
-  fetchWithAuthRetry,
-  getAccessToken,
-} from '@/lib/auth-client';
+import { clearAccessToken, fetchWithAuth, fetchWithAuthRetry, getAccessToken } from '@/lib/auth-client';
 import { buildApiUrl, fetchJsonWithRetry } from '@/lib/api';
-import {
-  areCartItemsEqual,
-  cartSnapshot,
-  getMaxCartQuantity,
-  mergeCartItems,
-  sanitizeCartItems,
-} from '@/lib/cart-utils';
+import { areCartItemsEqual, cartSnapshot, getMaxCartQuantity, mergeCartItems, sanitizeCartItems } from '@/lib/cart-utils';
 import { fetchInterestRows, mapInterestRows } from '@/lib/interest-utils';
 import { normalizeOrderPayload } from '@/lib/order-normalizer';
-
-type AccountSubView = 'profile' | 'addresses' | 'orders' | 'settings' | 'returns';
-
-interface AppContextType {
-  view: string;
-  setView: (view: string) => void;
-  accountSubView: AccountSubView;
-  setAccountSubView: React.Dispatch<React.SetStateAction<AccountSubView>>;
-  isLoggedIn: boolean;
-  setLoggedIn: () => void;
-  logout: () => void;
-  user: User | null;
-  interestMap: Map<string, number>;
-  categoryInterestMap: Map<string, number>;
-  trendingSearches: string[];
-  setUser: (user: User | null) => void;
-  fetchUserProfile: () => Promise<void>;
-  cart: CartItem[];
-  setCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
-  checkoutItemIds: string[] | null;
-  setCheckoutItemIds: (ids: string[] | null) => void;
-  selectedBranch: Branch | null;
-  setSelectedBranch: (branch: Branch | null) => void;
-  branches: Branch[];
-  branchInventory: BranchInventory[];
-  isBranchModalOpen: boolean;
-  setIsBranchModalOpen: (isOpen: boolean) => void;
-  isCartOpen: boolean;
-  setIsCartOpen: (isOpen: boolean) => void;
-  selectedProduct: Product | null;
-  setSelectedProduct: (product: Product | null) => void;
-  orders: Order[];
-  setOrders: React.Dispatch<React.SetStateAction<Order[]>>;
-  selectedOrder: Order | null;
-  setSelectedOrder: (order: Order | null) => void;
-  addToCart: (product: Product, options?: { openCart?: boolean }) => void;
-  updateQuantity: (id: string, delta: number) => void;
-  cartTotal: number;
-  isBranchOpen: (branch: Branch) => boolean;
-  searchQuery: string;
-  setSearchQuery: (query: string) => void;
-}
+import type { AccountSubView, AppContextType } from './app-context-types';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
