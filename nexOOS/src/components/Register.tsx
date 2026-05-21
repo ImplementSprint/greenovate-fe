@@ -140,7 +140,7 @@ function RegisterFormSection({
         <div className="flex items-center bg-slate-50 border border-slate-100 rounded-2xl focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500 transition-all overflow-hidden">
           <span className="flex items-center gap-2 pl-4 pr-3 py-4 text-slate-700 font-black text-sm shrink-0 border-r border-slate-200">
             <span className="text-base">🇵🇭</span>
-            +63
+            <span>+63</span>
           </span>
           <input
             id={fieldIds.phone}

@@ -154,6 +154,12 @@ const ORDER_ITEM_PLACEHOLDER_IMAGE =
     "</svg>",
   );
 
+const getOrderRowId = (row: Record<string, unknown>, index: number) =>
+  typeof row.id === 'string' ? row.id : `order-${index}`;
+
+const getOrderItemId = (entry: Record<string, unknown>, orderId: string, itemIndex: number) =>
+  typeof entry.id === 'string' ? entry.id : `${orderId}-item-${itemIndex}`;
+
 const normalizeOrderPayload = (payload: unknown): Order[] => {
   if (!Array.isArray(payload)) {
     return [];
@@ -164,9 +170,10 @@ const normalizeOrderPayload = (payload: unknown): Order[] => {
       ? (order as Record<string, unknown>)
       : {};
     const items = Array.isArray(row.items) ? row.items : [];
+    const orderId = getOrderRowId(row, index);
 
     return {
-      id: typeof row.id === 'string' ? row.id : `order-${index}`,
+      id: orderId,
       receiptNumber:
         typeof row.receiptNumber === 'string' ? row.receiptNumber : undefined,
       orderNumber:
@@ -182,10 +189,7 @@ const normalizeOrderPayload = (payload: unknown): Order[] => {
           : {};
 
         return {
-          id:
-            typeof entry.id === 'string'
-              ? entry.id
-              : `${typeof row.id === 'string' ? row.id : index}-item-${itemIndex}`,
+          id: getOrderItemId(entry, orderId, itemIndex),
           name: typeof entry.name === 'string' ? entry.name : 'Ordered item',
           description:
             typeof entry.description === 'string' ? entry.description : '',

@@ -22,6 +22,15 @@ const syncSelectedCartIds = (
   });
 };
 
+const getSubtotalLabel = (noneSelected: boolean, selectedCount: number) => {
+  if (noneSelected) {
+    return 'Subtotal';
+  }
+
+  const itemLabel = selectedCount === 1 ? 'item' : 'items';
+  return `Subtotal (${selectedCount} ${itemLabel})`;
+};
+
 export default function CartDrawer() {
   const {
     isLoggedIn,
@@ -223,7 +232,7 @@ export default function CartDrawer() {
                   <div className="p-4 border-t border-slate-100 bg-slate-50">
                     <div className="space-y-2 mb-4">
                       <div className="flex justify-between text-slate-500">
-                        <span>{noneSelected ? 'Subtotal' : `Subtotal (${selectedIds.size} item${selectedIds.size !== 1 ? 's' : ''})`}</span>
+                        <span>{getSubtotalLabel(noneSelected, selectedIds.size)}</span>
                         <span>₱{selectedSubtotal.toFixed(2)}</span>
                       </div>
                     </div>
