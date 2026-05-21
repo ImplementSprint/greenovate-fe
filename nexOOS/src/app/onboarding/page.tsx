@@ -16,6 +16,17 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 
 type Step = 'email' | 'otp' | 'done';
 
+const onboardingFieldIds = {
+  email: 'onboarding-email',
+  otp: 'onboarding-otp',
+};
+
+const formatStaffName = (value: string) =>
+  value
+    .split('.')
+    .map(s => s.charAt(0).toUpperCase() + s.slice(1))
+    .join(' ');
+
 export default function OnboardingPage() {
   const router = useRouter();
   const [step,       setStep]       = useState<Step>('email');
@@ -119,7 +130,7 @@ export default function OnboardingPage() {
           <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-500 to-violet-500 rounded-t-[2.5rem]" />
 
           {/* Step: done */}
-          {step === 'done' ? (
+          {step === 'done' && (
             <div className="text-center py-6">
               <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-5">
                 <CheckCircle2 className="w-8 h-8 text-green-500" />
@@ -130,14 +141,15 @@ export default function OnboardingPage() {
                 <div className="w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
               </div>
             </div>
-          ) : step === 'email' ? (
+          )}
+          {step === 'email' && (
             <>
               {/* Header */}
               <div className="mb-8">
                 <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mb-4">
                   <ShieldCheck className="w-6 h-6 text-blue-500" />
                 </div>
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight mb-1.5">Welcome, {staffName.split('.').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ')}!</h2>
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight mb-1.5">Welcome, {formatStaffName(staffName)}!</h2>
                 <p className="text-slate-500 text-sm leading-relaxed">Before you begin, please set up your email address. This will be used for account recovery and notifications.</p>
               </div>
 
@@ -150,10 +162,11 @@ export default function OnboardingPage() {
 
               <div className="space-y-5">
                 <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Your Email Address</label>
+                  <label htmlFor={onboardingFieldIds.email} className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Your Email Address</label>
                   <div className="relative">
                     <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
+                      id={onboardingFieldIds.email}
                       type="email"
                       value={email}
                       onChange={e => setEmail(e.target.value)}
@@ -173,7 +186,8 @@ export default function OnboardingPage() {
                 </button>
               </div>
             </>
-          ) : (
+          )}
+          {step === 'otp' && (
             <>
               {/* OTP step */}
               <div className="mb-8">
@@ -195,8 +209,9 @@ export default function OnboardingPage() {
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Verification Code</label>
+                  <label htmlFor={onboardingFieldIds.otp} className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Verification Code</label>
                   <input
+                    id={onboardingFieldIds.otp}
                     type="text"
                     inputMode="numeric"
                     maxLength={6}

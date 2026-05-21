@@ -90,12 +90,30 @@ export default function OrderStatus() {
   const [cancelReason, setCancelReason] = useState('');
   const [cancelReasonOther, setCancelReasonOther] = useState('');
 
-  const CANCEL_REASONS = [
+const CANCEL_REASONS = [
     'Changed my mind',
     'Found a better price elsewhere',
     'Ordered by mistake',
     'Other',
-  ];
+];
+
+const orderStatusFieldIds = {
+  cancelReason: 'cancel-reason',
+  returnReason: 'return-reason',
+  returnDescription: 'return-description',
+};
+
+const getReturnStatusClassName = (status: string) => {
+  if (status === 'approved' || status === 'completed') {
+    return 'bg-green-100 text-green-700';
+  }
+
+  if (status === 'rejected') {
+    return 'bg-red-100 text-red-700';
+  }
+
+  return 'bg-amber-100 text-amber-700';
+};
 
   const [isReturnModalOpen, setIsReturnModalOpen] = useState(false);
   const [isSubmittingReturn, setIsSubmittingReturn] = useState(false);
@@ -399,13 +417,7 @@ export default function OrderStatus() {
                     <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Status</span>
-                        <span className={`px-3 py-1 rounded-full text-xs font-black ${
-                          existingReturnRequest.status === 'approved' || existingReturnRequest.status === 'completed'
-                            ? 'bg-green-100 text-green-700'
-                            : existingReturnRequest.status === 'rejected'
-                            ? 'bg-red-100 text-red-700'
-                            : 'bg-amber-100 text-amber-700'
-                        }`}>
+                        <span className={`px-3 py-1 rounded-full text-xs font-black ${getReturnStatusClassName(existingReturnRequest.status)}`}>
                           {existingReturnRequest.status.charAt(0).toUpperCase() + existingReturnRequest.status.slice(1)}
                         </span>
                       </div>
@@ -440,7 +452,9 @@ export default function OrderStatus() {
       <AnimatePresence>
         {isCancelModalOpen && (
           <>
-            <motion.div
+            <motion.button
+              type="button"
+              aria-label="Close cancel order modal"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -462,10 +476,11 @@ export default function OrderStatus() {
                   Are you sure you want to cancel order <span className="font-bold text-slate-700">{selectedOrder.receiptNumber}</span>? This cannot be undone.
                 </p>
                 <div className="text-left mb-3">
-                  <label className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide">
+                  <label htmlFor={orderStatusFieldIds.cancelReason} className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide">
                     Reason for cancellation <span className="text-red-500">*</span>
                   </label>
                   <select
+                    id={orderStatusFieldIds.cancelReason}
                     value={cancelReason}
                     onChange={(e) => { setCancelReason(e.target.value); setCancelError(''); }}
                     className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700 bg-slate-50 outline-none focus:border-blue-400 focus:bg-white transition"
@@ -516,7 +531,9 @@ export default function OrderStatus() {
       <AnimatePresence>
         {isReturnModalOpen && (
           <>
-            <motion.div
+            <motion.button
+              type="button"
+              aria-label="Close return request modal"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50"
               onClick={() => { if (!isSubmittingReturn) setIsReturnModalOpen(false); }}
@@ -552,7 +569,7 @@ export default function OrderStatus() {
 
                     {/* Item selection */}
                     <div className="mb-4">
-                      <label className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide">Select items to return <span className="text-red-500">*</span></label>
+                      <p className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide">Select items to return <span className="text-red-500">*</span></p>
                       <div className="space-y-2">
                         {(selectedOrder.items ?? []).map((item) => (
                           <label key={item.id} className="flex items-center gap-3 p-3 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
@@ -571,8 +588,9 @@ export default function OrderStatus() {
 
                     {/* Reason */}
                     <div className="mb-4">
-                      <label className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide">Reason <span className="text-red-500">*</span></label>
+                      <label htmlFor={orderStatusFieldIds.returnReason} className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide">Reason <span className="text-red-500">*</span></label>
                       <select
+                        id={orderStatusFieldIds.returnReason}
                         value={returnReason}
                         onChange={(e) => { setReturnReason(e.target.value); setReturnError(''); }}
                         className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-slate-700 bg-slate-50 outline-none focus:border-blue-400 focus:bg-white transition"
@@ -584,8 +602,9 @@ export default function OrderStatus() {
 
                     {/* Description */}
                     <div className="mb-4">
-                      <label className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide">Additional details <span className="text-slate-400">(optional)</span></label>
+                      <label htmlFor={orderStatusFieldIds.returnDescription} className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide">Additional details <span className="text-slate-400">(optional)</span></label>
                       <textarea
+                        id={orderStatusFieldIds.returnDescription}
                         value={returnDescription}
                         onChange={(e) => setReturnDescription(e.target.value)}
                         placeholder="Describe the issue in more detail..."

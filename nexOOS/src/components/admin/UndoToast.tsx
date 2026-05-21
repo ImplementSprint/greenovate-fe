@@ -15,6 +15,18 @@ const UNDO_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
 const filterUndoEntriesById = (entries: UndoEntry[], id: string) =>
   entries.filter((entry) => entry.id !== id);
 
+const getCountdownStroke = (pct: number) => {
+  if (pct > 33) return '#3b82f6';
+  if (pct > 10) return '#f59e0b';
+  return '#ef4444';
+};
+
+const getCountdownTextClassName = (pct: number) => {
+  if (pct > 33) return 'text-slate-700';
+  if (pct > 10) return 'text-amber-600';
+  return 'text-red-600';
+};
+
 function Countdown({ expiresAt, onExpire }: { expiresAt: number; onExpire: () => void }) {
   const [remaining, setRemaining] = useState(0);
 
@@ -42,7 +54,7 @@ function Countdown({ expiresAt, onExpire }: { expiresAt: number; onExpire: () =>
         <circle
           cx="14" cy="14" r="11"
           fill="none"
-          stroke={pct > 33 ? '#3b82f6' : pct > 10 ? '#f59e0b' : '#ef4444'}
+          stroke={getCountdownStroke(pct)}
           strokeWidth="2.5"
           strokeDasharray={`${2 * Math.PI * 11}`}
           strokeDashoffset={`${2 * Math.PI * 11 * (1 - pct / 100)}`}
@@ -50,7 +62,7 @@ function Countdown({ expiresAt, onExpire }: { expiresAt: number; onExpire: () =>
           style={{ transition: 'stroke-dashoffset 0.5s linear, stroke 0.3s' }}
         />
       </svg>
-      <span className={`text-xs font-black tabular-nums ${pct > 33 ? 'text-slate-700' : pct > 10 ? 'text-amber-600' : 'text-red-600'}`}>
+      <span className={`text-xs font-black tabular-nums ${getCountdownTextClassName(pct)}`}>
         {mins}:{secs.toString().padStart(2, '0')}
       </span>
     </div>

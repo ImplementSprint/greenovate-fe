@@ -66,7 +66,7 @@ export function useOosSettings() {
 
 export function isPastCutoff(cutoffTime: string): boolean {
   const [hh, mm] = cutoffTime.split(':').map(Number);
-  if (isNaN(hh) || isNaN(mm)) return false;
+  if (Number.isNaN(hh) || Number.isNaN(mm)) return false;
   const now = new Date();
   const cutoffMinutes = hh * 60 + mm;
   const nowMinutes    = now.getHours() * 60 + now.getMinutes();

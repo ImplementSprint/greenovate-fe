@@ -45,6 +45,18 @@ const isRetryableStatus = (status: number) => [408, 425, 429, 500, 502, 503, 504
 const isAbortError = (error: unknown) =>
   error instanceof Error && error.name === 'AbortError';
 
+const getPayloadMessage = (payload: unknown, responseStatus: number) => {
+  if (typeof payload === 'object' && payload !== null && 'error' in payload && typeof payload.error === 'string') {
+    return payload.error;
+  }
+
+  if (typeof payload === 'object' && payload !== null && 'message' in payload && typeof payload.message === 'string') {
+    return payload.message;
+  }
+
+  return `Request failed with status ${responseStatus}`;
+};
+
 export async function fetchJson<T>(
   path: string,
   init?: RequestInit,
@@ -53,18 +65,7 @@ export async function fetchJson<T>(
   const payload = await parseResponseBody(response);
 
   if (!response.ok) {
-    const message =
-      typeof payload === 'object' &&
-      payload !== null &&
-      'error' in payload &&
-      typeof payload.error === 'string'
-        ? payload.error
-        : typeof payload === 'object' &&
-            payload !== null &&
-            'message' in payload &&
-            typeof payload.message === 'string'
-          ? payload.message
-          : `Request failed with status ${response.status}`;
+    const message = getPayloadMessage(payload, response.status);
 
     throw new ApiRequestError(message, response.status, payload);
   }

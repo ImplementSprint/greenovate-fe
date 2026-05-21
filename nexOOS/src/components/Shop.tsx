@@ -95,6 +95,38 @@ const getProductStock = (product: Product, inventoryStock?: number) => {
   return inventoryStock ?? 0;
 };
 
+function ProductStockBadge({
+  selectedBranch,
+  stock,
+  productStock,
+}: {
+  selectedBranch: Branch | null;
+  stock: number;
+  productStock?: number;
+}) {
+  if (selectedBranch && stock > 0) {
+    return (
+      <span className="flex w-fit items-center gap-1.5 rounded-full bg-blue-500/90 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-sm">
+        <CheckCircle2 className="h-3 w-3" /> In Stock ({stock})
+      </span>
+    );
+  }
+
+  const isOutOfStock = selectedBranch
+    ? stock === 0
+    : typeof productStock === 'number' && productStock === 0;
+
+  if (!isOutOfStock) {
+    return null;
+  }
+
+  return (
+    <span className="flex w-fit items-center gap-1.5 rounded-full bg-red-500/90 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-sm">
+      <X className="h-3 w-3" /> Out of Stock
+    </span>
+  );
+}
+
 const getAddToCartButtonClassName = (isDisabled: boolean) =>
   `rounded-xl p-2 shadow-md transition-all hover:shadow-lg ${
     isDisabled
@@ -426,23 +458,7 @@ export default function Shop() {
                     </span>
                   </div>
                   <div className="absolute bottom-3 left-3 right-3">
-                    {selectedBranch ? (
-                      stock > 0 ? (
-                        <span className="flex w-fit items-center gap-1.5 rounded-full bg-blue-500/90 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-sm">
-                          <CheckCircle2 className="h-3 w-3" /> In Stock ({stock})
-                        </span>
-                      ) : (
-                        <span className="flex w-fit items-center gap-1.5 rounded-full bg-red-500/90 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-sm">
-                          <X className="h-3 w-3" /> Out of Stock
-                        </span>
-                      )
-                    ) : (
-                      typeof product.stock === 'number' && product.stock === 0 && (
-                        <span className="flex w-fit items-center gap-1.5 rounded-full bg-red-500/90 px-3 py-1.5 text-[10px] font-bold text-white shadow-lg backdrop-blur-sm">
-                          <X className="h-3 w-3" /> Out of Stock
-                        </span>
-                      )
-                    )}
+                    <ProductStockBadge selectedBranch={selectedBranch} stock={stock} productStock={product.stock} />
                   </div>
                 </button>
 
