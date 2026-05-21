@@ -5,6 +5,7 @@ import { motion } from 'motion/react';
 import { ArrowRight, ShoppingBag, X, MapPin } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { fetchJsonWithRetry } from '@/lib/api';
+import { getProductRenderKey, normalizeProducts, rankForYouProducts } from '@/lib/product-utils';
 import { Product } from '../types';
 
 const partnerBrands = [
@@ -13,34 +14,6 @@ const partnerBrands = [
 ];
 
 const getPartnerBrandKey = (brand: string, list: 'primary' | 'duplicate') => `${list}-${brand}`;
-
-const normalizeProducts = (products: Product[]) => {
-  const seen = new Set<string>();
-
-  return products.filter((product) => {
-    const signature = [
-      product.id?.trim() || 'missing-id',
-      product.name?.trim() || 'missing-name',
-      product.category?.trim() || 'missing-category',
-      String(product.price ?? ''),
-    ].join('|');
-
-    if (seen.has(signature)) {
-      return false;
-    }
-
-    seen.add(signature);
-    return true;
-  });
-};
-
-const getProductRenderKey = (product: Product, idx: number) =>
-  [
-    product.id?.trim() || 'missing-id',
-    product.name?.trim() || 'missing-name',
-    product.category?.trim() || 'missing-category',
-    idx,
-  ].join('|');
 
 export default function Home() {
   const {
@@ -79,14 +52,7 @@ export default function Home() {
         const fetched = normalizeProducts(catalogPayload?.data ?? []);
 
         if (interestMap.size > 0 || categoryInterestMap.size > 0) {
-          const sorted = [...fetched].sort((a, b) => {
-            const catA = (categoryInterestMap.get(a.category) ?? 0) * 100;
-            const catB = (categoryInterestMap.get(b.category) ?? 0) * 100;
-            const prodA = (interestMap.get(a.id) ?? 0) * 10;
-            const prodB = (interestMap.get(b.id) ?? 0) * 10;
-            return (catB + prodB) - (catA + prodA);
-          });
-          setFeaturedProducts(sorted.slice(0, 4));
+          setFeaturedProducts(rankForYouProducts(fetched, interestMap, categoryInterestMap).slice(0, 4));
           setIsPersonalized(true);
         } else {
           setFeaturedProducts(fetched.slice(0, 4));
