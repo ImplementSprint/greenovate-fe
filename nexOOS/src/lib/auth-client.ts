@@ -1,6 +1,7 @@
 import { buildApiUrl } from './api';
 
 const ACCESS_TOKEN_KEY = 'access_token';
+const LEGACY_ACCESS_TOKEN_KEY = 'token';
 const DISPLAY_NAME_KEY = 'admin_display_name';
 
 const isBrowser = globalThis.window !== undefined;
@@ -22,16 +23,30 @@ function deleteCookie(name: string) {
   document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax`;
 }
 
+function getLegacyAccessToken() {
+  return isBrowser ? localStorage.getItem(LEGACY_ACCESS_TOKEN_KEY) : null;
+}
+
+function storeLegacyAccessToken(token: string) {
+  if (isBrowser) localStorage.setItem(LEGACY_ACCESS_TOKEN_KEY, token);
+}
+
+function clearLegacyAccessToken() {
+  if (isBrowser) localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY);
+}
+
 export function getAccessToken() {
-  return getCookie(ACCESS_TOKEN_KEY);
+  return getCookie(ACCESS_TOKEN_KEY) ?? getLegacyAccessToken();
 }
 
 export function storeAccessToken(token: string) {
   setCookie(ACCESS_TOKEN_KEY, token, 7);
+  storeLegacyAccessToken(token);
 }
 
 export function clearAccessToken() {
   deleteCookie(ACCESS_TOKEN_KEY);
+  clearLegacyAccessToken();
 }
 
 export function getAdminDisplayName(): string | null {
