@@ -74,6 +74,7 @@ import {
   type BirthdayRewardSettings,
   type ReferralRecord,
 } from "../../lib/member-lifecycle";
+import { DEMO_REFERRAL_CODE, demoChallenges, demoReferrals, demoSurveys } from "../../lib/demo-loyalty-data";
 
 type EngagementTab = "overview" | "rewards" | "challenges" | "sharing" | "surveys";
 
@@ -271,7 +272,9 @@ export default function CustomerEngagementPage() {
   const loadEngagementData = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) setLoadingError(false);
 
-    const [challengeRows, surveyRows, shares, referralRows, code, settings, status, privacy] = await Promise.all([
+    if (!user.memberId) return;
+
+    const results = await Promise.allSettled([
       loadChallengeDefinitions(),
       loadSurveyDefinitions(),
       loadSocialShareEvents({ memberIdentifier: user.memberId }),
@@ -282,11 +285,20 @@ export default function CustomerEngagementPage() {
       loadMemberPrivacySettings(user.memberId),
     ]);
 
-    setChallenges(challengeRows);
-    setSurveys(surveyRows);
+    const challengeRows = results[0].status === "fulfilled" ? results[0].value : [];
+    const surveyRows = results[1].status === "fulfilled" ? results[1].value : [];
+    const shares = results[2].status === "fulfilled" ? results[2].value : [];
+    const referralRows = results[3].status === "fulfilled" ? results[3].value : [];
+    const code = results[4].status === "fulfilled" ? results[4].value : "";
+    const settings = results[5].status === "fulfilled" ? results[5].value : defaultBirthdaySettings;
+    const status = results[6].status === "fulfilled" ? results[6].value : birthdayStatus;
+    const privacy = results[7].status === "fulfilled" ? results[7].value : defaultPrivacySettings;
+
+    setChallenges(challengeRows.length > 0 ? challengeRows : demoChallenges);
+    setSurveys(surveyRows.length > 0 ? surveyRows : demoSurveys);
     setShareEvents(shares);
-    setReferrals(referralRows);
-    setReferralCode(code);
+    setReferrals(referralRows.length > 0 ? referralRows : demoReferrals);
+    setReferralCode(code || DEMO_REFERRAL_CODE);
     setBirthdaySettings(settings);
     setBirthdayStatus(status);
     setPrivacySettings(privacy);

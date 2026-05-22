@@ -33,6 +33,10 @@ RUN npm run build
 FROM node:22-slim AS runner
 WORKDIR /app
 
+RUN apt-get update \
+  && apt-get install --only-upgrade -y --no-install-recommends libgnutls30 \
+  && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
