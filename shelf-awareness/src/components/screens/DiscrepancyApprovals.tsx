@@ -39,9 +39,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import Papa from "papaparse";
 
 type ShipmentDiscrepancy = {
   id: string;
@@ -165,7 +165,7 @@ export function DiscrepancyApprovals() {
   >(null);
   const [reportsOpen, setReportsOpen] = useState(true);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
-  const [isExportingExcel, setIsExportingExcel] =
+  const [isExportingCsv, setIsExportingCsv] =
     useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 10;
@@ -514,8 +514,8 @@ export function DiscrepancyApprovals() {
     }
   };
 
-  const handleExportExcel = () => {
-    setIsExportingExcel(true);
+  const handleExportCsv = () => {
+    setIsExportingCsv(true);
     try {
       const overviewRows = [
         { metric: "Pending", value: statusCounts.pending ?? 0 },
@@ -578,41 +578,46 @@ export function DiscrepancyApprovals() {
         defects: row.defects,
       }));
 
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(
-        workbook,
-        XLSX.utils.json_to_sheet(overviewRows),
-        "Overview",
-      );
-      XLSX.utils.book_append_sheet(
-        workbook,
-        XLSX.utils.json_to_sheet(discrepancyRows),
-        "Discrepancies",
-      );
-      XLSX.utils.book_append_sheet(
-        workbook,
-        XLSX.utils.json_to_sheet(supplierRows),
-        "Supplier Defects",
-      );
+      const sections = [
+        ["Overview", overviewRows],
+        ["Discrepancies", discrepancyRows],
+        ["Supplier Defects", supplierRows],
+      ] as const;
+      const csv = sections
+        .map(([title, rows]) =>
+          [
+            title,
+            Papa.unparse(rows as Record<string, unknown>[], {
+              newline: "\n",
+            }),
+          ].join("\n"),
+        )
+        .join("\n\n");
+      const blob = new Blob([csv], {
+        type: "text/csv;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `discrepancies-report-${exportTimestamp}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
 
-      XLSX.writeFile(
-        workbook,
-        `discrepancies-report-${exportTimestamp}.xlsx`,
-      );
-
-      toast.success("Excel exported", {
+      toast.success("CSV exported", {
         description:
-          "The discrepancies workbook has been downloaded.",
+          "The discrepancies report has been downloaded.",
       });
     } catch (err) {
-      toast.error("Excel export failed", {
+      toast.error("CSV export failed", {
         description:
           err instanceof Error
             ? err.message
             : "Unknown export error",
       });
     } finally {
-      setIsExportingExcel(false);
+      setIsExportingCsv(false);
     }
   };
 
@@ -640,13 +645,13 @@ export function DiscrepancyApprovals() {
           <Button
             variant="outline"
             className="border-[#111827]/20 text-[#111827]"
-            onClick={handleExportExcel}
-            disabled={isExportingExcel}
+            onClick={handleExportCsv}
+            disabled={isExportingCsv}
           >
             <Download className="w-4 h-4 mr-2" />
-            {isExportingExcel
-              ? "Exporting Excel..."
-              : "Export Excel"}
+            {isExportingCsv
+              ? "Exporting CSV..."
+              : "Export CSV"}
           </Button>
           <div className="relative">
             <Search className="w-4 h-4 text-[#9CA3AF] absolute left-3 top-1/2 -translate-y-1/2" />

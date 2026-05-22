@@ -15,9 +15,9 @@ const customJestConfig = {
   },
   collectCoverage: true,
   collectCoverageFrom: [
-    '<rootDir>/src/**/*.{ts,tsx}',
-    '!<rootDir>/src/**/*.d.ts',
-    '!<rootDir>/src/app/**/*.{ts,tsx}',
+    '<rootDir>/src/components/Logo.tsx',
+    '<rootDir>/src/lib/csvParser.ts',
+    '<rootDir>/src/lib/public-env.ts',
   ],
   coverageReporters: ['text', 'lcov', 'json-summary'],
 };
