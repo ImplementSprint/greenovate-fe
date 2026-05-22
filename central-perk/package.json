@@ -8,6 +8,7 @@
         "build": "next build",
         "start": "next start --hostname 0.0.0.0 --port 3000",
         "server": "next start --hostname 0.0.0.0 --port 3000",
+        "test:unit": "vitest run tests/unit --coverage",
         "test:contract": "node --test tests/contract/*.test.mjs",
         "test:contract:points": "node --test tests/contract/points.consumer.pact.test.mjs",
         "test:contract:campaigns": "node --test tests/contract/campaigns.consumer.pact.test.mjs",
@@ -80,9 +81,11 @@
         "@types/node": "^25.5.2",
         "@types/react": "19.2.14",
         "@types/react-dom": "^19.2.3",
+        "@vitest/coverage-v8": "^4.1.7",
         "pg": "^8.20.0",
         "tailwindcss": "4.1.12",
-        "typescript": "^5.9.3"
+        "typescript": "^5.9.3",
+        "vitest": "^4.1.7"
     },
     "description": "This is a code bundle for Design Log. The original project is available at https://www.figma.com/design/Gp9tJFj47Xx36LdY2RUXRA/Design-Log.",
     "main": "index.js",
