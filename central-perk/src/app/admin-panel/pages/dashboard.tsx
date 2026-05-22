@@ -3,19 +3,25 @@ import {
   Activity,
   ArrowDownRight,
   ArrowUpRight,
+  Bell,
   CalendarDays,
   ChevronRight,
   ClipboardCheck,
+  ClipboardList,
   Coins,
   Gift,
   HeartPulse,
   Megaphone,
+  MessageSquareText,
   Percent,
   RefreshCcw,
+  Send,
   ShieldAlert,
+  Share2,
   Sparkles,
   Target,
   TriangleAlert,
+  Trophy,
   Users,
   UserPlus,
 } from "lucide-react";
@@ -32,7 +38,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useOutletContext, useSearchParams } from "react-router-dom";
 import {
   Dialog,
   DialogContent,
@@ -43,7 +49,18 @@ import {
 } from "../../../components/ui/dialog";
 import { cn } from "../../../components/ui/utils";
 import { useAdminData } from "../hooks/use-admin-data";
-import { buildInactiveMemberInsights } from "../../lib/member-engagement";
+import {
+  buildInactiveMemberInsights,
+  loadChallengeDefinitions,
+  loadNotificationCampaigns,
+  loadSocialShareEvents,
+  loadSurveyDefinitions,
+  type ChallengeDefinition,
+  type NotificationCampaign,
+  type ShareEvent,
+  type SurveyDefinition,
+} from "../../lib/member-engagement";
+import { loadAllReferrals, loadFeedback, type FeedbackRecord, type ReferralRecord } from "../../lib/member-lifecycle";
 import { loadVouchersViaApi, loadPartnerDashboardViaApi } from "../../lib/api";
 import {
   loadCampaignPerformance,
@@ -151,15 +168,6 @@ type ActionCenterItem = {
   records: ActionRecord[];
 };
 
-type ActionModalState = {
-  title: string;
-  description: string;
-  actionLabel: string;
-  actionHref?: string;
-  rows: ActionRecord[];
-  emptyText: string;
-};
-
 type InsightItem = {
   title: string;
   value: string;
@@ -169,6 +177,20 @@ type InsightItem = {
   ctaLabel?: string;
   icon: LucideIcon;
   tone: "teal" | "amber" | "rose" | "violet" | "blue";
+};
+
+type SystemSignalItem = {
+  label: string;
+  value: number | string;
+  supporting: string;
+  href: string;
+  icon: LucideIcon;
+  tone: "teal" | "amber" | "rose" | "violet" | "blue" | "green";
+};
+
+type AdminDashboardOutletContext = {
+  notificationCount?: number;
+  openNotifications?: () => void;
 };
 
 type PartnerDashboardRow = Awaited<ReturnType<typeof loadPartnerDashboardViaApi>>["partners"][number];
@@ -353,6 +375,15 @@ function insightToneClass(tone: InsightItem["tone"]) {
   if (tone === "violet") return "bg-[#f3efff] text-[#7c3aed]";
   if (tone === "blue") return "bg-[#eef6ff] text-[#2563eb]";
   return "bg-[#e9fffb] text-[#0f766e]";
+}
+
+function systemSignalToneClass(tone: SystemSignalItem["tone"]) {
+  if (tone === "amber") return "border-[#f5d6a1] bg-[#fffaf0] text-[#9a6117]";
+  if (tone === "rose") return "border-[#f0c6cf] bg-[#fff5f7] text-[#9b2438]";
+  if (tone === "violet") return "border-[#d9cdfb] bg-[#f8f5ff] text-[#5b3fb6]";
+  if (tone === "blue") return "border-[#c7daf8] bg-[#f5f9ff] text-[#1d4ed8]";
+  if (tone === "green") return "border-[#bee7cf] bg-[#f4fff8] text-[#15803d]";
+  return "border-[#c2e8e2] bg-[#f4fffb] text-[#0f766e]";
 }
 
 function emptyActionRecords(message: string): ActionRecord[] {
@@ -756,6 +787,12 @@ function PerformanceTable<T>(props: {
 }
 
 function actionCenterIcon(label: string): LucideIcon {
+  if (label.includes("Feedback")) return MessageSquareText;
+  if (label.includes("Referral")) return Users;
+  if (label.includes("Survey")) return ClipboardList;
+  if (label.includes("Challenge")) return Trophy;
+  if (label.includes("Push")) return Send;
+  if (label.includes("Share")) return Share2;
   if (label.includes("Pending")) return ClipboardCheck;
   if (label.includes("Failed")) return RefreshCcw;
   if (label.includes("Expiring")) return CalendarDays;
@@ -764,37 +801,38 @@ function actionCenterIcon(label: string): LucideIcon {
   return TriangleAlert;
 }
 
-function ActionCenterCard(props: {
-  item: ActionCenterItem;
-  onOpen: (item: ActionCenterItem) => void;
-}) {
-  const { item, onOpen } = props;
+function ActionCenterCard({ item }: { item: ActionCenterItem }) {
   const Icon = actionCenterIcon(item.label);
-  return (
-    <div className="grid grid-cols-[40px_minmax(0,1fr)_48px_102px] items-center gap-3 border-b border-[#e7edf5] px-1 py-[14px] last:border-b-0 max-sm:grid-cols-[40px_minmax(0,1fr)_48px] max-sm:gap-x-3 max-sm:gap-y-2">
-      <div className={cn("flex h-9 w-9 items-center justify-center rounded-[10px]", actionToneClass(item.tone))}>
-        <Icon className="h-[18px] w-[18px]" />
+  const content = (
+    <div className="grid min-w-0 grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg border border-[#e3eaf4] bg-[#fbfdff] p-2.5 transition hover:border-[#cbd9eb] hover:bg-white sm:grid-cols-[36px_minmax(0,1fr)_48px_82px]">
+      <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px]", actionToneClass(item.tone))}>
+        <Icon className="h-4 w-4" />
       </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[15px] font-medium leading-5 text-[#071936]">{item.label}</p>
+      <div className="min-w-0">
+        <p className="truncate text-[13px] font-extrabold leading-5 text-[#071936]">{item.label}</p>
+        <p className="truncate text-[11px] font-semibold leading-4 text-[#64748b]">{item.description}</p>
       </div>
-      <div className="flex justify-center">
-        <span className={cn("inline-flex h-9 min-w-12 items-center justify-center rounded-[10px] px-3 text-[14px] font-medium", actionToneClass(item.tone))}>
-          {integerFormatter.format(item.count)}
-        </span>
-      </div>
-      <button
-        type="button"
-        onClick={() => onOpen(item)}
+      <span className={cn("inline-flex h-7 min-w-10 shrink-0 items-center justify-center rounded-[9px] px-2 text-[13px] font-black", actionToneClass(item.tone))}>
+        {integerFormatter.format(item.count)}
+      </span>
+      <span
         className={cn(
-          "inline-flex h-[43px] w-[102px] items-center justify-center rounded-[10px] border border-[#c7d9ee] bg-white px-4 text-[14px] font-medium text-[#071936] shadow-none transition",
+          "col-span-3 inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md border border-[#c7d9ee] bg-white px-2.5 text-[11px] font-black text-[#071936] sm:col-span-1",
           actionButtonToneClass(item.tone),
-          "max-sm:col-start-2 max-sm:w-full",
         )}
       >
         {item.actionLabel}
-      </button>
+        <ChevronRight className="h-3 w-3" />
+      </span>
     </div>
+  );
+
+  if (!item.actionHref) return content;
+
+  return (
+    <Link to={item.actionHref} className="block min-w-0">
+      {content}
+    </Link>
   );
 }
 
@@ -824,6 +862,26 @@ function InsightCard({ item }: { item: InsightItem }) {
   return (
     <Link to={href} className="block h-full">
       {content}
+    </Link>
+  );
+}
+
+function SystemSignalCard({ item }: { item: SystemSignalItem }) {
+  const Icon = item.icon;
+  return (
+    <Link
+      to={item.href}
+      className="flex min-h-[104px] min-w-0 flex-col rounded-lg border border-[#e3eaf4] bg-white p-4 shadow-[0_8px_20px_rgba(17,38,60,0.04)] transition hover:border-[#cdd9eb]"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border", systemSignalToneClass(item.tone))}>
+          <Icon className="h-[18px] w-[18px]" />
+        </div>
+        <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-[#7a8aa0]" />
+      </div>
+      <p className="mt-3 text-[12px] font-bold text-[#52627a]">{item.label}</p>
+      <p className="mt-1 text-2xl font-extrabold leading-none text-[#071936]">{typeof item.value === "number" ? integerFormatter.format(item.value) : item.value}</p>
+      <p className="mt-2 line-clamp-2 text-[11px] font-semibold leading-4 text-[#64748b]">{item.supporting}</p>
     </Link>
   );
 }
@@ -981,6 +1039,7 @@ function DashboardErrorBanner(props: { message: string; onRetry: () => void }) {
 }
 
 export default function AdminDashboardPage() {
+  const { notificationCount = 0, openNotifications } = useOutletContext<AdminDashboardOutletContext>();
   const [searchParams, setSearchParams] = useSearchParams();
   const defaultStart = toInputDate(startOfCurrentMonth());
   const defaultEnd = toInputDate(new Date());
@@ -1004,9 +1063,14 @@ export default function AdminDashboardPage() {
   const [campaignPerformance, setCampaignPerformance] = useState<CampaignPerformance[]>([]);
   const [vouchers, setVouchers] = useState<RedemptionVoucher[]>([]);
   const [partnerDashboard, setPartnerDashboard] = useState<PartnerDashboardRow[]>([]);
+  const [notificationCampaigns, setNotificationCampaigns] = useState<NotificationCampaign[]>([]);
+  const [surveys, setSurveys] = useState<SurveyDefinition[]>([]);
+  const [challenges, setChallenges] = useState<ChallengeDefinition[]>([]);
+  const [referrals, setReferrals] = useState<ReferralRecord[]>([]);
+  const [feedback, setFeedback] = useState<FeedbackRecord[]>([]);
+  const [shareEvents, setShareEvents] = useState<ShareEvent[]>([]);
   const [auxLoading, setAuxLoading] = useState(true);
   const [auxError, setAuxError] = useState<string | null>(null);
-  const [actionModal, setActionModal] = useState<ActionModalState | null>(null);
   // Compact layout is enabled by default to fit more panels without scrolling.
   const compactMode = true;
 
@@ -1019,9 +1083,26 @@ export default function AdminDashboardPage() {
       loadCampaignPerformance(),
       loadVouchersViaApi({}),
       loadPartnerDashboardViaApi(),
+      loadNotificationCampaigns(),
+      loadSurveyDefinitions(),
+      loadChallengeDefinitions(),
+      loadAllReferrals(),
+      loadFeedback(),
+      loadSocialShareEvents(),
     ]);
 
-    const [campaignsResult, performanceResult, vouchersResult, partnerResult] = results;
+    const [
+      campaignsResult,
+      performanceResult,
+      vouchersResult,
+      partnerResult,
+      notificationCampaignsResult,
+      surveysResult,
+      challengesResult,
+      referralsResult,
+      feedbackResult,
+      shareEventsResult,
+    ] = results;
     const failedEndpoints: string[] = [];
 
     if (campaignsResult.status === "fulfilled") {
@@ -1056,6 +1137,54 @@ export default function AdminDashboardPage() {
       failedEndpoints.push("/api/partners/dashboard");
     }
 
+    if (notificationCampaignsResult.status === "fulfilled") {
+      setNotificationCampaigns(notificationCampaignsResult.value || []);
+    } else {
+      console.error("[dashboard] GET /api/notification-campaigns failed", notificationCampaignsResult.reason);
+      setNotificationCampaigns([]);
+      failedEndpoints.push("/api/notification-campaigns");
+    }
+
+    if (surveysResult.status === "fulfilled") {
+      setSurveys(surveysResult.value || []);
+    } else {
+      console.error("[dashboard] GET /api/engagement/surveys failed", surveysResult.reason);
+      setSurveys([]);
+      failedEndpoints.push("/api/engagement/surveys");
+    }
+
+    if (challengesResult.status === "fulfilled") {
+      setChallenges(challengesResult.value || []);
+    } else {
+      console.error("[dashboard] GET /api/engagement/challenges failed", challengesResult.reason);
+      setChallenges([]);
+      failedEndpoints.push("/api/engagement/challenges");
+    }
+
+    if (referralsResult.status === "fulfilled") {
+      setReferrals(referralsResult.value || []);
+    } else {
+      console.error("[dashboard] GET /api/members/referrals failed", referralsResult.reason);
+      setReferrals([]);
+      failedEndpoints.push("/api/members/referrals");
+    }
+
+    if (feedbackResult.status === "fulfilled") {
+      setFeedback(feedbackResult.value || []);
+    } else {
+      console.error("[dashboard] GET /api/members/feedback failed", feedbackResult.reason);
+      setFeedback([]);
+      failedEndpoints.push("/api/members/feedback");
+    }
+
+    if (shareEventsResult.status === "fulfilled") {
+      setShareEvents(shareEventsResult.value || []);
+    } else {
+      console.error("[dashboard] GET /api/social-share-events failed", shareEventsResult.reason);
+      setShareEvents([]);
+      failedEndpoints.push("/api/social-share-events");
+    }
+
     if (failedEndpoints.length > 0) {
       setAuxError(`Some dashboard panels are partially unavailable: ${failedEndpoints.join(", ")}`);
     }
@@ -1066,6 +1195,19 @@ export default function AdminDashboardPage() {
   useEffect(() => {
     void refreshAuxiliaryData();
   }, [refreshAuxiliaryData]);
+
+  useEffect(() => {
+    const refreshEverything = () => {
+      void refetch();
+      void refreshAuxiliaryData();
+    };
+    const interval = window.setInterval(refreshEverything, 30_000);
+    window.addEventListener("focus", refreshEverything);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshEverything);
+    };
+  }, [refetch, refreshAuxiliaryData]);
 
   // no-op: compact mode fixed to true for this build
 
@@ -1452,6 +1594,101 @@ export default function AdminDashboardPage() {
     [partnerDashboard],
   );
 
+  const liveSurveys = useMemo(() => surveys.filter((survey) => survey.status === "live"), [surveys]);
+  const activeChallenges = useMemo(
+    () => challenges.filter((challenge) => (parseTimestamp(challenge.endAt) ?? 0) >= Date.now()),
+    [challenges],
+  );
+  const scheduledPushCampaigns = useMemo(
+    () => notificationCampaigns.filter((campaign) => campaign.status === "scheduled" || campaign.status === "live"),
+    [notificationCampaigns],
+  );
+  const referralConversions = useMemo(() => referrals.filter((referral) => referral.status === "joined").length, [referrals]);
+  const pendingReferralInvites = useMemo(() => referrals.filter((referral) => referral.status !== "joined"), [referrals]);
+  const surveyResponseCount = useMemo(
+    () => surveys.reduce((sum, survey) => sum + Math.max(0, survey.responses?.length || 0), 0),
+    [surveys],
+  );
+  const shareConversionCount = useMemo(
+    () => shareEvents.reduce((sum, event) => sum + Math.max(0, Number(event.conversions || 0)), 0),
+    [shareEvents],
+  );
+  const averageFeedbackRating = useMemo(
+    () => (feedback.length ? feedback.reduce((sum, item) => sum + Number(item.rating || 0), 0) / feedback.length : 0),
+    [feedback],
+  );
+  const lowRatingFeedback = useMemo(() => feedback.filter((item) => Number(item.rating || 0) <= 3), [feedback]);
+
+  const systemSignals = useMemo<SystemSignalItem[]>(
+    () => [
+      {
+        label: "Push Campaigns",
+        value: scheduledPushCampaigns.length,
+        supporting: `${notificationCampaigns.length} total campaigns synced from notification service`,
+        href: "/admin/engagement?tab=notifications&modal=push",
+        icon: Send,
+        tone: "blue",
+      },
+      {
+        label: "Referral Pipeline",
+        value: referrals.length,
+        supporting: `${referralConversions} conversions / ${pendingReferralInvites.length} pending invites`,
+        href: "/admin/engagement?modal=referrals",
+        icon: Users,
+        tone: "teal",
+      },
+      {
+        label: "Member Feedback",
+        value: feedback.length,
+        supporting: `${averageFeedbackRating ? averageFeedbackRating.toFixed(1) : "0.0"} avg rating / ${lowRatingFeedback.length} need attention`,
+        href: "/admin/engagement?modal=feedback",
+        icon: MessageSquareText,
+        tone: lowRatingFeedback.length > 0 ? "rose" : "violet",
+      },
+      {
+        label: "Live Surveys",
+        value: liveSurveys.length,
+        supporting: `${surveyResponseCount} submitted responses across ${surveys.length} surveys`,
+        href: "/admin/engagement?tab=surveys&modal=surveys",
+        icon: ClipboardList,
+        tone: "violet",
+      },
+      {
+        label: "Active Challenges",
+        value: activeChallenges.length,
+        supporting: `${challenges.length} published challenges available to customers`,
+        href: "/admin/engagement?tab=challenges&modal=challenges",
+        icon: Trophy,
+        tone: "green",
+      },
+      {
+        label: "Social Shares",
+        value: shareEvents.length,
+        supporting: `${shareConversionCount} referral conversions attributed to share events`,
+        href: "/admin/engagement?tab=sharing",
+        icon: Share2,
+        tone: "amber",
+      },
+    ],
+    [
+      activeChallenges.length,
+      averageFeedbackRating,
+      challenges.length,
+      feedback.length,
+      liveSurveys.length,
+      lowRatingFeedback.length,
+      notificationCampaigns.length,
+      pendingReferralInvites.length,
+      referralConversions,
+      referrals.length,
+      scheduledPushCampaigns.length,
+      shareConversionCount,
+      shareEvents.length,
+      surveyResponseCount,
+      surveys.length,
+    ],
+  );
+
   const actionCenterItems = useMemo<ActionCenterItem[]>(() => {
     const now = Date.now();
     const pendingValidations = vouchers
@@ -1497,8 +1734,93 @@ export default function AdminDashboardPage() {
       }));
 
     const systemWarnings = [...contactWarnings, ...partnerWarnings, ...missingPerformanceWarnings];
+    const recentFeedbackRecords = feedback
+      .slice(0, 6)
+      .map((item) => ({
+        primary: item.memberName || item.memberId || "Member feedback",
+        secondary: `${item.rating}/5 ${item.category} / ${item.comment}`,
+        badge: Number(item.rating) <= 3 ? "Needs review" : "Feedback",
+      }));
+    const pendingReferralRecords = pendingReferralInvites
+      .slice(0, 6)
+      .map((referral) => ({
+        primary: referral.referrerCode || referral.referrerMemberId || "Referral invite",
+        secondary: `${referral.refereeEmail} / created ${new Date(referral.createdAt).toLocaleDateString()}`,
+        badge: "Pending",
+      }));
+    const surveyRecords = liveSurveys
+      .slice(0, 6)
+      .map((survey) => ({
+        primary: survey.title,
+        secondary: `${survey.responses?.length || 0} responses / ${survey.bonusPoints} bonus points / ${survey.segment}`,
+        badge: "Live",
+      }));
+    const challengeRecords = activeChallenges
+      .slice(0, 6)
+      .map((challenge) => ({
+        primary: challenge.title,
+        secondary: `${challenge.rewardPoints} reward points / ends ${new Date(challenge.endAt).toLocaleDateString()}`,
+        badge: "Active",
+      }));
+    const pushRecords = scheduledPushCampaigns
+      .slice(0, 6)
+      .map((campaign) => ({
+        primary: campaign.name,
+        secondary: `${campaign.segment} / ${campaign.status} / ${new Date(campaign.scheduledFor).toLocaleDateString()}`,
+        badge: campaign.status,
+      }));
 
     return [
+      {
+        label: "Customer Feedback",
+        count: feedback.length,
+        actionLabel: "Review",
+        actionHref: "/admin/engagement?modal=feedback",
+        tone: "violet",
+        description: "Feedback submitted from the customer engagement page.",
+        emptyText: "No member feedback has been submitted yet.",
+        records: recentFeedbackRecords.length > 0 ? recentFeedbackRecords : emptyActionRecords("No member feedback has been submitted yet."),
+      },
+      {
+        label: "Referral Pipeline",
+        count: pendingReferralInvites.length,
+        actionLabel: "Track",
+        actionHref: "/admin/engagement?modal=referrals",
+        tone: "teal",
+        description: "Pending referral invites waiting for conversion.",
+        emptyText: "No pending referral invites are waiting right now.",
+        records: pendingReferralRecords.length > 0 ? pendingReferralRecords : emptyActionRecords("No pending referral invites are waiting right now."),
+      },
+      {
+        label: "Live Surveys",
+        count: liveSurveys.length,
+        actionLabel: "Open",
+        actionHref: "/admin/engagement?tab=surveys&modal=surveys",
+        tone: "blue",
+        description: "Published surveys visible to customer survey and earn-points flows.",
+        emptyText: "No live surveys are currently published.",
+        records: surveyRecords.length > 0 ? surveyRecords : emptyActionRecords("No live surveys are currently published."),
+      },
+      {
+        label: "Active Challenges",
+        count: activeChallenges.length,
+        actionLabel: "Open",
+        actionHref: "/admin/engagement?tab=challenges&modal=challenges",
+        tone: "amber",
+        description: "Published challenges visible to customers.",
+        emptyText: "No active customer challenges are currently published.",
+        records: challengeRecords.length > 0 ? challengeRecords : emptyActionRecords("No active customer challenges are currently published."),
+      },
+      {
+        label: "Scheduled Push",
+        count: scheduledPushCampaigns.length,
+        actionLabel: "Manage",
+        actionHref: "/admin/engagement?tab=notifications&modal=push",
+        tone: "blue",
+        description: "Notification campaigns scheduled or live in the notification service.",
+        emptyText: "No push campaigns are scheduled or live.",
+        records: pushRecords.length > 0 ? pushRecords : emptyActionRecords("No push campaigns are scheduled or live."),
+      },
       {
         label: "Pending Validations",
         count: pendingValidations.length,
@@ -1508,11 +1830,11 @@ export default function AdminDashboardPage() {
         description: "Reward vouchers waiting for manual or counter validation.",
         emptyText: "No vouchers are waiting for validation.",
         records:
-          pendingValidations.slice(0, 6).map((voucher) => ({
+          pendingValidations.length > 0 ? pendingValidations.slice(0, 6).map((voucher) => ({
             primary: voucher.rewardName,
             secondary: `${voucher.voucherCode} / ${voucher.method === "in-store" ? "In-store pickup" : "Delivery processing"} / ${new Date(voucher.createdAt).toLocaleDateString()}`,
             badge: "Ready",
-          })) || emptyActionRecords("No vouchers are waiting for validation."),
+          })) : emptyActionRecords("No vouchers are waiting for validation."),
       },
       {
         label: "Failed Redemptions",
@@ -1523,11 +1845,11 @@ export default function AdminDashboardPage() {
         description: "Processing vouchers that have remained unresolved for more than 3 days.",
         emptyText: "No overdue redemption issues were detected.",
         records:
-          failedRedemptions.slice(0, 6).map((voucher) => ({
+          failedRedemptions.length > 0 ? failedRedemptions.slice(0, 6).map((voucher) => ({
             primary: voucher.rewardName,
             secondary: `${voucher.voucherCode} has been processing since ${new Date(voucher.createdAt).toLocaleDateString()}.`,
             badge: "Overdue",
-          })) || emptyActionRecords("No overdue redemption issues were detected."),
+          })) : emptyActionRecords("No overdue redemption issues were detected."),
       },
       {
         label: "Expiring Campaigns",
@@ -1538,11 +1860,11 @@ export default function AdminDashboardPage() {
         description: "Campaigns that end within the next 14 days and may need extension or replacement.",
         emptyText: "No campaigns are expiring soon.",
         records:
-          expiringCampaigns.slice(0, 6).map((campaign) => ({
+          expiringCampaigns.length > 0 ? expiringCampaigns.slice(0, 6).map((campaign) => ({
             primary: campaign.campaignName,
             secondary: `${campaignStatusLabel(campaign.status)} / ends ${new Date(campaign.endsAt).toLocaleDateString()}`,
             badge: "Expiring",
-          })) || emptyActionRecords("No campaigns are expiring soon."),
+          })) : emptyActionRecords("No campaigns are expiring soon."),
       },
       {
         label: "Low Performing Rewards",
@@ -1553,26 +1875,26 @@ export default function AdminDashboardPage() {
         description: "Active rewards underperforming relative to the current period redemption baseline.",
         emptyText: "All visible rewards are performing within the current benchmark band.",
         records:
-          lowPerformingRewards.slice(0, 6).map((reward) => ({
+          lowPerformingRewards.length > 0 ? lowPerformingRewards.slice(0, 6).map((reward) => ({
             primary: reward.name,
             secondary: `${integerFormatter.format(reward.redemptions)} redemptions / ${singleDecimalFormatter.format(reward.rate)}% redemption rate`,
             badge: "Low traction",
-          })) || emptyActionRecords("All visible rewards are performing within the current benchmark band."),
+          })) : emptyActionRecords("All visible rewards are performing within the current benchmark band."),
       },
       {
         label: "Inactive Members (60+ days)",
         count: inactiveMembers.length,
         actionLabel: "Engage",
-        actionHref: "/admin/members?segment=inactive_60d",
+        actionHref: "/admin/engagement?tab=winback&modal=inactive",
         tone: "blue",
         description: "Members who have been dormant long enough to qualify for a win-back action.",
         emptyText: "No inactive member backlog is currently above the 60-day threshold.",
         records:
-          inactiveMembers.slice(0, 6).map((member) => ({
+          inactiveMembers.length > 0 ? inactiveMembers.slice(0, 6).map((member) => ({
             primary: member.memberName,
             secondary: `${member.memberNumber} / ${member.daysInactive} days inactive / ${member.suggestedOffer}`,
             badge: member.riskLevel,
-          })) || emptyActionRecords("No inactive member backlog is currently above the 60-day threshold."),
+          })) : emptyActionRecords("No inactive member backlog is currently above the 60-day threshold."),
       },
       {
         label: "System Warnings",
@@ -1585,7 +1907,26 @@ export default function AdminDashboardPage() {
         records: systemWarnings.length > 0 ? systemWarnings.slice(0, 6) : emptyActionRecords("No active dashboard warnings were detected from the currently available records."),
       },
     ];
-  }, [campaigns, dashboardData.rewardPerformanceRows, inactiveMembers, memberRecords, partnerWarnings, performanceByCampaignId, vouchers]);
+  }, [
+    activeChallenges,
+    campaigns,
+    dashboardData.rewardPerformanceRows,
+    feedback,
+    inactiveMembers,
+    liveSurveys,
+    memberRecords,
+    partnerWarnings,
+    pendingReferralInvites,
+    performanceByCampaignId,
+    scheduledPushCampaigns,
+    vouchers,
+  ]);
+
+  const visibleActionCenterItems = useMemo(
+    () => actionCenterItems.slice(0, 5),
+    [actionCenterItems],
+  );
+  const monitoredActionCount = Math.max(0, actionCenterItems.length - visibleActionCenterItems.length);
 
   const insights = useMemo<InsightItem[]>(() => {
     const topMemberInsight: InsightItem = dashboardData.topMember
@@ -1764,31 +2105,59 @@ export default function AdminDashboardPage() {
 
   return (
     <>
-      <div className={cn(adminPageShellClass, "mx-auto max-w-[1180px] space-y-3 px-3 py-2 pb-5")}>
-        <section className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h1 className="text-[28px] font-extrabold leading-none tracking-normal text-[#132036]">Dashboard Overview</h1>
-            <p className="mt-2 text-[13px] font-medium text-[#5f6f86]">Monitor loyalty health, rewards performance, and operational alerts.</p>
+      <div className={cn(adminPageShellClass, "mx-auto max-w-[1540px] space-y-3 px-3 py-2 pb-5")}>
+        <header className="rounded-[16px] border border-[#d9e8f6] bg-[linear-gradient(135deg,#ffffff_0%,#f3fbff_48%,#eef8ff_100%)] px-5 py-5 shadow-[0_14px_32px_rgba(17,38,60,0.07)]">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div>
+              <div className="inline-flex items-center rounded-full border border-[#cbe4f6] bg-white/90 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#0b7f88]">
+                Admin Command Center
+              </div>
+              <h1 className="mt-3 text-[28px] font-extrabold leading-none tracking-normal text-[#132036] sm:text-[30px]">Dashboard Overview</h1>
+              <p className="mt-2 text-[13px] font-medium text-[#5f6f86]">Monitor loyalty health, rewards performance, and operational alerts.</p>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-2.5 self-start">
+              {auxLoading ? (
+                <span className="inline-flex h-10 items-center rounded-full border border-[#dfe7f1] bg-white px-3 text-[12px] font-bold text-[#64748b] shadow-[0_8px_18px_rgba(17,38,60,0.05)]">
+                  Refreshing data
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => openNotifications?.()}
+                aria-label="Notifications"
+                className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#d4e5f4] bg-white/80 text-[#132036] shadow-[0_8px_18px_rgba(17,38,60,0.06)] transition hover:bg-white hover:shadow-sm"
+              >
+                <Bell className="h-5 w-5" />
+                {notificationCount > 0 ? (
+                  <span className="absolute -right-1 -top-1 flex h-5 min-w-[20px] items-center justify-center rounded-full border-2 border-white bg-[#0b8b95] px-1 text-[10px] font-bold text-white">
+                    {notificationCount}
+                  </span>
+                ) : null}
+              </button>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            {auxLoading ? (
-              <span className="inline-flex h-10 items-center rounded-md border border-[#dfe7f1] bg-white px-3 text-[12px] font-bold text-[#64748b]">
-                Refreshing data
-              </span>
-            ) : null}
-            <DateRangeSelector
-              startDate={startDate}
-              endDate={endDate}
-              onApply={(nextStart, nextEnd) => setQueryParams({ startDate: nextStart, endDate: nextEnd })}
-            />
-            <ComparisonSelector value={compareMode} onChange={(value) => setQueryParams({ compare: value })} />
-            <Link to="/admin/rewards#rewards-campaigns" className={cn(adminPrimaryButtonClass, "h-10 rounded-md px-4 shadow-[0_8px_18px_rgba(11,127,136,0.18)]")}>
-              <Megaphone className="h-4 w-4" />
-              Create Campaign
-            </Link>
+          <div className="mt-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="inline-flex w-fit items-center rounded-full border border-[#d7e7f4] bg-white/75 px-3 py-1.5 text-[12px] font-semibold text-[#52627a] shadow-[0_6px_16px_rgba(17,38,60,0.04)]">
+              <CalendarDays className="mr-2 h-4 w-4 text-[#0b7f88]" />
+              <span>{formatHeaderRange(startDate, endDate)}</span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <DateRangeSelector
+                startDate={startDate}
+                endDate={endDate}
+                onApply={(nextStart, nextEnd) => setQueryParams({ startDate: nextStart, endDate: nextEnd })}
+              />
+              <ComparisonSelector value={compareMode} onChange={(value) => setQueryParams({ compare: value })} />
+              <Link to="/admin/rewards#rewards-campaigns" className={cn(adminPrimaryButtonClass, "h-10 rounded-md px-4 shadow-[0_8px_18px_rgba(11,127,136,0.18)]")}>
+                <Megaphone className="h-4 w-4" />
+                Create Campaign
+              </Link>
+            </div>
           </div>
-        </section>
+        </header>
 
         {error ? <DashboardErrorBanner message={error} onRetry={handleRetry} /> : null}
         {auxError ? (
@@ -1801,6 +2170,28 @@ export default function AdminDashboardPage() {
           {kpiCards.map((card) => (
             <DashboardKpiCard key={card.title} {...card} compareMode={compareMode} />
           ))}
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-[16px] font-extrabold text-[#18263b]">System Activity Sync</h2>
+              <p className="text-[12px] font-semibold text-[#64748b]">Customer and admin workflow events reflected from live APIs.</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-[#dfe7f1] bg-white px-3 text-[12px] font-bold text-[#24364f] transition hover:bg-[#f8fbff]"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              Refresh
+            </button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            {systemSignals.map((item) => (
+              <SystemSignalCard key={item.label} item={item} />
+            ))}
+          </div>
         </section>
 
         <section className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.85fr)]">
@@ -1905,24 +2296,16 @@ export default function AdminDashboardPage() {
           </SectionCard>
 
           <SectionCard title="B. Action Center" subtitle="Operational alerts and next actions" icon={TriangleAlert}>
-            <div className="min-h-0 flex-1">
-              {actionCenterItems.map((item) => (
-                <ActionCenterCard
-                  key={item.label}
-                  item={item}
-                  onOpen={(selected) =>
-                    setActionModal({
-                      title: selected.label,
-                      description: selected.description,
-                      actionLabel: selected.actionLabel,
-                      actionHref: selected.actionHref,
-                      rows: selected.records,
-                      emptyText: selected.emptyText,
-                    })
-                  }
-                />
+            <div className="flex min-h-0 flex-1 flex-col gap-2">
+              {visibleActionCenterItems.map((item) => (
+                <ActionCenterCard key={item.label} item={item} />
               ))}
             </div>
+            {monitoredActionCount > 0 ? (
+              <Link to="/admin/engagement" className="mt-2.5 inline-flex h-8 items-center justify-center rounded-md border border-[#c7d9ee] bg-white px-3 text-[11px] font-black text-[#071936] transition hover:border-[#9fd7dd] hover:bg-[#f4ffff]">
+                Open engagement studio for {monitoredActionCount} more checks
+              </Link>
+            ) : null}
           </SectionCard>
         </section>
 
@@ -1939,41 +2322,6 @@ export default function AdminDashboardPage() {
         </section>
       </div>
 
-      <Dialog open={Boolean(actionModal)} onOpenChange={(open) => !open && setActionModal(null)}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{actionModal?.title}</DialogTitle>
-            <DialogDescription>{actionModal?.description}</DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[420px] overflow-y-auto rounded-lg border border-[#e5edf6] bg-[#fbfdff]">
-            {actionModal?.rows.length ? (
-              <div className="divide-y divide-[#edf2f7]">
-                {actionModal.rows.map((row, index) => (
-                  <div key={`${row.primary}-${index}`} className="flex items-start justify-between gap-3 p-3">
-                    <div>
-                      <p className="text-sm font-bold text-[#18263b]">{row.primary}</p>
-                      <p className="mt-1 text-xs leading-5 text-[#607087]">{row.secondary}</p>
-                    </div>
-                    {row.badge ? <span className="shrink-0 rounded-md bg-white px-2 py-1 text-[11px] font-bold text-[#52627a] ring-1 ring-[#e1e9f3]">{row.badge}</span> : null}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="p-4 text-sm text-[#607087]">{actionModal?.emptyText}</p>
-            )}
-          </div>
-          <DialogFooter>
-            <button type="button" onClick={() => setActionModal(null)} className={cn(adminOutlineButtonClass, "rounded-md")}>
-              Close
-            </button>
-            {actionModal?.actionHref ? (
-              <Link to={actionModal.actionHref} onClick={() => setActionModal(null)} className={cn(adminPrimaryButtonClass, "rounded-md")}>
-                {actionModal.actionLabel}
-              </Link>
-            ) : null}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
