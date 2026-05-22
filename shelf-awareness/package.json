@@ -2,12 +2,15 @@
   "name": "shelf-awareness",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=20 <26"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "test": "jest",
+    "lint": "eslint .",
+    "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:e2e": "tsx tests/e2e/playwright-e2e.ts"
   },
@@ -74,7 +77,6 @@
     "tailwind-merge": "3.2.0",
     "tw-animate-css": "1.3.8",
     "vaul": "1.1.2",
-    "xlsx": "^0.18.5",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
@@ -96,5 +98,8 @@
     "tailwindcss": "^4.2.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
+  },
+  "overrides": {
+    "postcss": "8.5.15"
   }
 }
