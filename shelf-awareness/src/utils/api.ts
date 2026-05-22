@@ -1,14 +1,15 @@
-import { getNextPublicEnv } from "@/lib/public-env";
+const defaultGatewayBaseUrl = "http://localhost:3001/api";
 
-function getApiBaseUrl() {
-  return getNextPublicEnv(
-    "NEXT_PUBLIC_SUPABASE_URL",
-    "http://localhost:54321",
-  ).replace(/\/$/, "") + "/functions/v1/api-gateway";
-}
+export const apiBaseUrl =
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  process.env.VITE_API_BASE_URL ??
+  process.env.REACT_APP_API_BASE_URL ??
+  defaultGatewayBaseUrl;
 
 export function buildGatewayUrl(path: string) {
-  const normalizedBase = getApiBaseUrl();
+  const normalizedBase = apiBaseUrl.endsWith("/")
+    ? apiBaseUrl.slice(0, -1)
+    : apiBaseUrl;
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${normalizedBase}${normalizedPath}`;
 }

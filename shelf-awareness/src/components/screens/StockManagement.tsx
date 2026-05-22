@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   TrendingDown,
@@ -10,7 +11,9 @@ import {
   CheckCircle2,
   XCircle,
   FileBarChart,
+  Printer,
 } from "lucide-react";
+import { QRLabelModal } from "../shared/QRLabelModal";
 import {
   Card,
   CardContent,
@@ -20,12 +23,17 @@ import {
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
+  blockInvalidNumberKeys,
+  sanitizeSignedIntegerInput,
+} from "../../lib/inputSanitizers";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+import { SearchableProductSelect } from "../shared/SearchableProductSelect";
 import {
   Dialog,
   DialogContent,
@@ -36,6 +44,7 @@ import {
 } from "../ui/dialog";
 import { Label } from "../ui/label";
 import { toast } from "sonner";
+import { notifyDashboardDataChanged } from "@/lib/dashboardInvalidation";
 import {
   Tabs,
   TabsContent,
@@ -52,9 +61,11 @@ import {
   type StockAdjustment,
   type ReasonCategory,
 } from "@/imports/adjustmentAPI";
-import { supabase } from "@/lib/supabase";
+import { supabaseFulfillment } from "@/lib/supabase";
+import { fetchInventoryItems } from "@/lib/inventoryService";
+import { listCatalogProducts } from "@/lib/productCatalogService";
 import MovementReport from "@/imports/movement-report";
-import ValuationReport from "@/imports/valuation-report";
+import EvaluationReport from "@/imports/evaluation-report";
 
 interface StockItem {
   id: string;
@@ -92,99 +103,8 @@ interface BackorderAlertRow {
   created_at: string;
 }
 
-const mockStock: StockItem[] = [
-  {
-    id: "1",
-    sku: "AMX-500",
-    name: "Amoxicillin 500mg",
-    location: "Main Warehouse Manila",
-    zone: "Zone A",
-    aisle: "A-01",
-    bin: "Bin 15",
-    currentStock: 12500,
-    minStock: 1000,
-    maxStock: 15000,
-    status: "healthy",
-    lastRestocked: "2026-02-15",
-  },
-  {
-    id: "2",
-    sku: "CET-10",
-    name: "Cetirizine 10mg",
-    location: "Main Warehouse Manila",
-    zone: "Zone A",
-    aisle: "A-03",
-    bin: "Bin 22",
-    currentStock: 320,
-    minStock: 1200,
-    maxStock: 5000,
-    status: "critical",
-    lastRestocked: "2026-01-10",
-  },
-  {
-    id: "3",
-    sku: "MET-500",
-    name: "Metformin 500mg",
-    location: "Main Warehouse Manila",
-    zone: "Zone A",
-    aisle: "A-05",
-    bin: "Bin 08",
-    currentStock: 850,
-    minStock: 800,
-    maxStock: 4000,
-    status: "low",
-    lastRestocked: "2026-02-01",
-  },
-  {
-    id: "4",
-    sku: "PAR-500",
-    name: "Paracetamol 500mg",
-    location: "Satellite Hub Quezon City",
-    zone: "Zone B",
-    aisle: "B-02",
-    bin: "Bin 45",
-    currentStock: 18200,
-    minStock: 1500,
-    maxStock: 10000,
-    status: "overstock",
-    lastRestocked: "2026-02-18",
-  },
-  {
-    id: "5",
-    sku: "IBU-400",
-    name: "Ibuprofen 400mg",
-    location: "Main Warehouse Manila",
-    zone: "Zone A",
-    aisle: "A-02",
-    bin: "Bin 18",
-    currentStock: 8900,
-    minStock: 800,
-    maxStock: 12000,
-    status: "healthy",
-    lastRestocked: "2026-02-12",
-  },
-  {
-    id: "6",
-    sku: "LOS-50",
-    name: "Losartan 50mg",
-    location: "Satellite Hub Makati",
-    zone: "Zone C",
-    aisle: "C-01",
-    bin: "Bin 03",
-    currentStock: 450,
-    minStock: 600,
-    maxStock: 3000,
-    status: "low",
-    lastRestocked: "2026-01-28",
-  },
-];
-
-const warehouseLocations = [
-  "Main Warehouse Manila",
-  "Satellite Hub Quezon City",
-  "Satellite Hub Makati",
-  "Cold Storage Facility",
-];
+const STOCK_ROWS_PER_PAGE = 10;
+const CARD_ROWS_PER_PAGE = 5;
 
 const EMPTY_FORM = {
   product_id: 0,
@@ -222,7 +142,52 @@ const getCalendarAgeDays = (createdAt: string): number => {
   );
 };
 
+function ListPager({
+  page,
+  totalPages,
+  onPrevious,
+  onNext,
+}: {
+  page: number;
+  totalPages: number;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  if (totalPages <= 1) return null;
+
+  return (
+    <div className="flex items-center justify-between border-t border-[#E5E7EB] pt-3">
+      <span className="text-xs text-[#6B7280]">
+        Page {page} of {totalPages}
+      </span>
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onPrevious}
+          disabled={page <= 1}
+          className="border-[#111827]/20 text-[#111827]"
+        >
+          Previous
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onNext}
+          disabled={page >= totalPages}
+          className="border-[#111827]/20 text-[#111827]"
+        >
+          Next
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function StockManagement() {
+  const router = useRouter();
   // Inventory states
   const [searchTerm, setSearchTerm] = useState("");
   const [locationFilter, setLocationFilter] =
@@ -231,7 +196,8 @@ export function StockManagement() {
     useState<string>("all");
   const [showTransferDialog, setShowTransferDialog] =
     useState(false);
-  const [, setSelectedItem] = useState<StockItem | null>(null);
+  const [selectedItem, setSelectedItem] =
+    useState<StockItem | null>(null);
   const [backorders, setBackorders] = useState<
     BackorderAgingRow[]
   >([]);
@@ -240,6 +206,13 @@ export function StockManagement() {
   >([]);
   const [backorderLoading, setBackorderLoading] =
     useState(false);
+  const [realStock, setRealStock] = useState<StockItem[]>([]);
+  const [isStockLoading, setIsStockLoading] = useState(false);
+  const [movementRefreshKey, setMovementRefreshKey] = useState(0);
+  const [stockPage, setStockPage] = useState(1);
+  const [lowStockPage, setLowStockPage] = useState(1);
+  const [backorderPage, setBackorderPage] = useState(1);
+  const [alertPage, setAlertPage] = useState(1);
 
   // Main tab state
   const [mainTab, setMainTab] = useState("inventory");
@@ -257,9 +230,19 @@ export function StockManagement() {
     useState<StockAdjustment | null>(null);
   const [managerName, setManagerName] = useState("");
   const [rejectNote, setRejectNote] = useState("");
+  const [requestError, setRequestError] = useState("");
+  const [transferForm, setTransferForm] = useState({
+    productId: "",
+    fromBinId: "",
+    toBinId: "",
+    qty: "",
+  });
+  const [bins, setBins] = useState<{ id: string; name: string }[]>([]);
   const [modalAction, setModalAction] = useState<
     "approve" | "reject" | null
   >(null);
+  const [selectedBinForQR, setSelectedBinForQR] = useState<any | null>(null);
+  const [showBinQRModal, setShowBinQRModal] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -267,14 +250,14 @@ export function StockManagement() {
     const loadBackorderData = async () => {
       setBackorderLoading(true);
       const [backordersRes, alertsRes] = await Promise.all([
-        supabase
+        supabaseFulfillment
           .from("v_backorder_aging")
           .select(
             "backorder_id, order_uuid, order_no, retailer_name, sku, qty_backordered, created_at, age_days, latest_status",
           )
           .order("created_at", { ascending: true })
           .limit(25),
-        supabase
+        supabaseFulfillment
           .from("backorder_alerts")
           .select(
             "id, sku, message, grn_reference, pending_backorder_count, created_at",
@@ -300,9 +283,58 @@ export function StockManagement() {
       setBackorderLoading(false);
     };
 
-    void loadBackorderData();
+    const loadRealStock = async () => {
+      setIsStockLoading(true);
+      try {
+        const [data, catalogProducts] = await Promise.all([
+          fetchInventoryItems(),
+          listCatalogProducts({ limit: 1000 }),
+        ]);
+        const productsBySku = new Map<string, any>(
+          catalogProducts.map((product: any) => [product.sku, product]),
+        );
+        setRealStock(data.map(item => ({
+          id: item.productUuid || item.id, // Use UUID for backend operations
+          sku: item.sku,
+          name: item.name,
+          location:
+            productsBySku.get(item.sku)?.warehouse_location ||
+            "Unassigned",
+          zone: "-",
+          aisle: "-",
+          bin: "-",
+          currentStock: item.systemCount,
+          minStock: 0,
+          maxStock: item.systemCount,
+          status: item.status === "low" ? "low" : item.status === "zero" ? "critical" : "healthy",
+          lastRestocked: item.lastUpdated ? new Date(item.lastUpdated).toISOString().split('T')[0] : "N/A"
+        })));
+      } catch (err) {
+        console.error("Failed to load real stock:", err);
+      } finally {
+        setIsStockLoading(false);
+      }
+    };
 
-    const channel = supabase
+    const loadBins = async () => {
+      try {
+        const { data, error } = await supabaseFulfillment
+          .from("bins")
+          .select("id, name")
+          .order("name", { ascending: true });
+        if (!error && data) {
+          setBins(data);
+        }
+      } catch (err) {
+        console.error("Failed to load bins:", err);
+      }
+    };
+
+    void loadRealStock();
+    void loadBackorderData();
+    void loadBins();
+
+    const channel = supabaseFulfillment
       .channel("stock-management-backorder-alerts")
       .on(
         "postgres_changes",
@@ -329,7 +361,7 @@ export function StockManagement() {
 
     return () => {
       isMounted = false;
-      void supabase.removeChannel(channel);
+      void supabaseFulfillment.removeChannel(channel);
     };
   }, []);
 
@@ -338,20 +370,23 @@ export function StockManagement() {
     if (mainTab === "adjustments") {
       setLoading(true);
       Promise.all([
-        supabase
-          .from("products")
-          .select(
-            "product_id, sku, product_name, inventory_on_hand",
-          )
-          .order("product_name")
-          .then(({ data }) => setProducts(data ?? [])),
+        listCatalogProducts({ limit: 500 }).then((data) =>
+          setProducts(
+            data.map((row: any) => ({
+              product_id: row.product_id,
+              sku: row.sku,
+              product_name: row.product_name,
+              inventory_on_hand: row.inventory_on_hand ?? 0,
+            })),
+          ),
+        ),
         fetchAdjustments().then(setAdjustments),
       ]).finally(() => setLoading(false));
     }
   }, [mainTab]);
 
   // Inventory filters
-  const filteredStock = mockStock.filter((item) => {
+  const filteredStock = realStock.filter((item) => {
     const keyword = searchTerm.trim().toLowerCase();
     const matchesSearch =
       keyword.length === 0 ||
@@ -365,11 +400,21 @@ export function StockManagement() {
     return matchesSearch && matchesLocation && matchesStatus;
   });
 
-  const lowStockItems = mockStock.filter(
+  const locationOptions = useMemo(
+    () =>
+      Array.from(new Set(realStock.map((item) => item.location)))
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b)),
+    [realStock],
+  );
+
+  const statusOptions = ["healthy", "low", "critical", "overstock"];
+
+  const lowStockItems = realStock.filter(
     (item) =>
       item.status === "low" || item.status === "critical",
   );
-  const criticalItems = mockStock.filter(
+  const criticalItems = realStock.filter(
     (item) => item.status === "critical",
   );
   const backordersWithAge = useMemo(
@@ -384,6 +429,55 @@ export function StockManagement() {
     (max, row) => Math.max(max, row.computed_age_days),
     0,
   );
+
+  const stockTotalPages = Math.max(
+    1,
+    Math.ceil(filteredStock.length / STOCK_ROWS_PER_PAGE),
+  );
+  const pagedStock = filteredStock.slice(
+    (stockPage - 1) * STOCK_ROWS_PER_PAGE,
+    stockPage * STOCK_ROWS_PER_PAGE,
+  );
+  const lowStockTotalPages = Math.max(
+    1,
+    Math.ceil(lowStockItems.length / CARD_ROWS_PER_PAGE),
+  );
+  const pagedLowStockItems = lowStockItems.slice(
+    (lowStockPage - 1) * CARD_ROWS_PER_PAGE,
+    lowStockPage * CARD_ROWS_PER_PAGE,
+  );
+  const backorderTotalPages = Math.max(
+    1,
+    Math.ceil(backordersWithAge.length / CARD_ROWS_PER_PAGE),
+  );
+  const pagedBackorders = backordersWithAge.slice(
+    (backorderPage - 1) * CARD_ROWS_PER_PAGE,
+    backorderPage * CARD_ROWS_PER_PAGE,
+  );
+  const alertTotalPages = Math.max(
+    1,
+    Math.ceil(backorderAlerts.length / CARD_ROWS_PER_PAGE),
+  );
+  const pagedBackorderAlerts = backorderAlerts.slice(
+    (alertPage - 1) * CARD_ROWS_PER_PAGE,
+    alertPage * CARD_ROWS_PER_PAGE,
+  );
+
+  useEffect(() => {
+    setStockPage(1);
+  }, [searchTerm, locationFilter, statusFilter]);
+
+  useEffect(() => {
+    setLowStockPage((page) => Math.min(page, lowStockTotalPages));
+  }, [lowStockTotalPages]);
+
+  useEffect(() => {
+    setBackorderPage((page) => Math.min(page, backorderTotalPages));
+  }, [backorderTotalPages]);
+
+  useEffect(() => {
+    setAlertPage((page) => Math.min(page, alertTotalPages));
+  }, [alertTotalPages]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -410,18 +504,116 @@ export function StockManagement() {
     return <Package className="w-4 h-4" />;
   };
 
-  const handleStockTransfer = () => {
-    toast.success("Stock Transfer Initiated", {
-      description:
-        "Transfer request has been logged and will be processed",
-    });
-    setShowTransferDialog(false);
-    setSelectedItem(null);
+  const handleStockTransfer = async () => {
+    if (
+      !transferForm.productId ||
+      !transferForm.fromBinId ||
+      !transferForm.toBinId ||
+      !transferForm.qty
+    ) {
+      toast.error("Invalid Transfer", {
+        description: "Please fill all fields.",
+      });
+      return;
+    }
+
+    if (transferForm.fromBinId === transferForm.toBinId) {
+      toast.error("Invalid Transfer", {
+        description: "Source and destination locations must be different.",
+      });
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const { data, error } = await supabaseFulfillment.rpc(
+        "transfer_stock",
+        {
+          p_product_id: transferForm.productId,
+          p_from_bin_id: transferForm.fromBinId,
+          p_to_bin_id: transferForm.toBinId,
+          p_qty: Number(transferForm.qty),
+          p_created_by: "System Admin",
+        },
+      );
+
+      if (error) {
+        console.error("RPC Error:", error);
+        throw new Error(error.message || "Database communication error");
+      }
+      
+      if (!data || data.success === false) {
+        throw new Error(data?.error || "The transfer was rejected by the warehouse validation rules.");
+      }
+
+      toast.success("Stock Transfer Successful", {
+        description: `${transferForm.qty} units moved. Log ID: ${data.log_id || "N/A"}`,
+      });
+      notifyDashboardDataChanged("operations:stock-transfer");
+      
+      setShowTransferDialog(false);
+      setTransferForm({
+        productId: "",
+        fromBinId: "",
+        toBinId: "",
+        qty: "",
+      });
+      
+      // Trigger movement report refresh
+      setMovementRefreshKey(prev => prev + 1);
+
+      // Refresh stock data
+      void (async () => {
+        setIsStockLoading(true);
+        try {
+          const [stockData, catalogProducts] = await Promise.all([
+            fetchInventoryItems(),
+            listCatalogProducts({ limit: 1000 }),
+          ]);
+          const productsBySku = new Map<string, any>(
+            catalogProducts.map((product: any) => [product.sku, product]),
+          );
+          setRealStock(stockData.map(item => ({
+            id: item.id,
+            sku: item.sku,
+            name: item.name,
+            location:
+              productsBySku.get(item.sku)?.warehouse_location ||
+              "Unassigned",
+            zone: "-",
+            aisle: "-",
+            bin: "-",
+            currentStock: item.systemCount,
+            minStock: 0,
+            maxStock: item.systemCount,
+            status: item.status === "low" ? "low" : item.status === "zero" ? "critical" : "healthy",
+            lastRestocked: item.lastUpdated ? new Date(item.lastUpdated).toISOString().split('T')[0] : "N/A"
+          })));
+        } catch (err) {
+          console.error("Failed to refresh stock:", err);
+        } finally {
+          setIsStockLoading(false);
+        }
+      })();
+
+    } catch (e: any) {
+      toast.error("Transfer Failed", {
+        description: e.message,
+      });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // Stock Adjustment handlers
   const f = (k: string) => (e: any) =>
-    setForm((p) => ({ ...p, [k]: e.target.value }));
+    setForm((p) => ({
+      ...p,
+      [k]:
+        k === "qty_change"
+          ? sanitizeSignedIntegerInput(e.target.value)
+          : e.target.value,
+    }));
 
   const handleProductChange = (value: string) => {
     const p = products.find(
@@ -435,9 +627,14 @@ export function StockManagement() {
         product_name: p.product_name,
         qty_before: p.inventory_on_hand,
       }));
+    setRequestError("");
   };
 
   const handleSubmitAdjustment = async () => {
+    const parsedQtyChange = Number.parseInt(
+      String(form.qty_change),
+      10,
+    );
     if (
       !form.product_id ||
       !form.qty_change ||
@@ -445,14 +642,28 @@ export function StockManagement() {
       !form.requested_by
     )
       return;
+    if (!Number.isFinite(parsedQtyChange) || parsedQtyChange === 0) {
+      setRequestError(
+        "Quantity change must be a whole number other than 0.",
+      );
+      return;
+    }
+    if (form.qty_before + parsedQtyChange < 0) {
+      setRequestError(
+        "This adjustment would make stock negative. Reduce the deduction or replenish stock first.",
+      );
+      return;
+    }
+    setRequestError("");
     setSubmitting(true);
     try {
       const result = await submitAdjustment({
         ...form,
-        qty_change: parseInt(form.qty_change as any),
+        qty_change: parsedQtyChange,
       });
       setAdjustments((p) => [result, ...p]);
       setForm(EMPTY_FORM);
+      notifyDashboardDataChanged("operations:adjustment-submitted");
       toast.success("Adjustment Submitted", {
         description: "Awaiting manager approval",
       });
@@ -467,6 +678,13 @@ export function StockManagement() {
 
   const handleApprove = async () => {
     if (!modalAdj || !managerName.trim()) return;
+    if (modalAdj.qty_after < 0) {
+      toast.error("Approval Failed", {
+        description:
+          "This adjustment would make stock negative. Update the request before approving it.",
+      });
+      return;
+    }
     setSubmitting(true);
     try {
       await approveAdjustment(modalAdj.id, managerName);
@@ -482,7 +700,18 @@ export function StockManagement() {
             : a,
         ),
       );
+      setProducts((prev) =>
+        prev.map((product) =>
+          product.product_id === modalAdj.product_id
+            ? {
+                ...product,
+                inventory_on_hand: modalAdj.qty_after,
+              }
+            : product,
+        ),
+      );
       closeModal();
+      notifyDashboardDataChanged("operations:adjustment-approved");
       toast.success("Adjustment Approved", {
         description: `Approved by ${managerName} — stock updated`,
       });
@@ -517,6 +746,7 @@ export function StockManagement() {
         ),
       );
       closeModal();
+      notifyDashboardDataChanged("operations:adjustment-rejected");
       toast.success("Adjustment Rejected");
     } catch (e: any) {
       toast.error("Rejection Failed", {
@@ -544,7 +774,9 @@ export function StockManagement() {
     form.qty_change &&
     parseInt(form.qty_change as any) !== 0 &&
     form.reason.length >= 10 &&
-    form.requested_by.trim();
+    form.requested_by.trim() &&
+    newQty !== null &&
+    newQty >= 0;
 
   const pendingAdjustments = adjustments.filter(
     (a) => a.status === "pending",
@@ -651,7 +883,7 @@ export function StockManagement() {
                     Reason
                   </div>
                   <div className="text-sm text-[#1A2B47] italic">
-                    &quot;{modalAdj.reason}&quot;
+                    "{modalAdj.reason}"
                   </div>
                 </div>
 
@@ -826,11 +1058,11 @@ export function StockManagement() {
             Movement Report
           </TabsTrigger>
           <TabsTrigger
-            value="valuation"
+            value="evaluation"
             className="data-[state=active]:bg-[#00A3AD] data-[state=active]:text-white text-white/80 font-medium"
           >
             <FileBarChart className="w-4 h-4 mr-2" />
-            Valuation Report
+            Evaluation Report
           </TabsTrigger>
         </TabsList>
 
@@ -845,7 +1077,7 @@ export function StockManagement() {
                   </div>
                   <div>
                     <div className="text-2xl font-bold text-[#111827]">
-                      {mockStock.length}
+                      {realStock.length}
                     </div>
                     <div className="text-sm text-[#6B7280]">
                       Total SKUs Tracked
@@ -947,7 +1179,7 @@ export function StockManagement() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {backordersWithAge.map((row) => (
+                    {pagedBackorders.map((row) => (
                       <div
                         key={row.backorder_id}
                         className="rounded-lg border border-[#E5E7EB] p-3"
@@ -979,6 +1211,18 @@ export function StockManagement() {
                         </div>
                       </div>
                     ))}
+                    <ListPager
+                      page={backorderPage}
+                      totalPages={backorderTotalPages}
+                      onPrevious={() =>
+                        setBackorderPage((page) => Math.max(1, page - 1))
+                      }
+                      onNext={() =>
+                        setBackorderPage((page) =>
+                          Math.min(backorderTotalPages, page + 1),
+                        )
+                      }
+                    />
                   </div>
                 )}
               </CardContent>
@@ -1000,7 +1244,7 @@ export function StockManagement() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {backorderAlerts.map((alert) => (
+                    {pagedBackorderAlerts.map((alert) => (
                       <div
                         key={alert.id}
                         className="rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] p-3"
@@ -1033,6 +1277,18 @@ export function StockManagement() {
                         )}
                       </div>
                     ))}
+                    <ListPager
+                      page={alertPage}
+                      totalPages={alertTotalPages}
+                      onPrevious={() =>
+                        setAlertPage((page) => Math.max(1, page - 1))
+                      }
+                      onNext={() =>
+                        setAlertPage((page) =>
+                          Math.min(alertTotalPages, page + 1),
+                        )
+                      }
+                    />
                   </div>
                 )}
               </CardContent>
@@ -1048,7 +1304,7 @@ export function StockManagement() {
             </CardHeader>
             <CardContent className="pt-6">
               <div className="space-y-3">
-                {lowStockItems.map((item) => (
+                {pagedLowStockItems.map((item) => (
                   <div
                     key={item.id}
                     className={`p-4 rounded-lg border-2 ${
@@ -1108,10 +1364,7 @@ export function StockManagement() {
                           Shortage
                         </div>
                         <div className="text-lg font-bold text-[#F97316]">
-                          -
-                          {(
-                            item.minStock - item.currentStock
-                          ).toLocaleString()}
+                          {Math.max(0, item.minStock - item.currentStock).toLocaleString()}
                         </div>
                       </div>
                     </div>
@@ -1119,22 +1372,55 @@ export function StockManagement() {
                     <div className="flex items-center justify-between">
                       <div className="text-sm text-[#6B7280]">
                         <MapPin className="w-4 h-4 inline mr-1" />
-                        {item.location} • {item.zone} •{" "}
-                        {item.aisle}
+                        {[item.location, item.zone, item.aisle].filter(Boolean).join(" • ") || "No location assigned"}
                       </div>
-                      <Button
-                        size="sm"
-                        className="bg-[#00A3AD] hover:bg-[#0891B2] text-white"
-                        onClick={() => {
-                          setSelectedItem(item);
-                          setShowTransferDialog(true);
-                        }}
-                      >
-                        Create P.O.
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-[#00A3AD] text-[#00A3AD] hover:bg-[#00A3AD]/5"
+                          onClick={() => {
+                            setSelectedItem(item);
+                            setTransferForm(prev => ({
+                              ...prev,
+                              productId: item.id,
+                              fromBinId: bins[0]?.id || "",
+                              toBinId: bins[1]?.id || ""
+                            }));
+                            setShowTransferDialog(true);
+                          }}
+                        >
+                          <ArrowRightLeft className="w-3 h-3 mr-1" />
+                          Internal Transfer
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="bg-[#00A3AD] hover:bg-[#0891B2] text-white"
+                          onClick={() => {
+                            toast.info("Procurement Workflow", {
+                              description: `Navigating to Procurement to create P.O. for ${item.sku}...`
+                            });
+                            router.push(`/procurement?prefillSku=${item.sku}`);
+                          }}
+                        >
+                          Create P.O.
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 ))}
+                <ListPager
+                  page={lowStockPage}
+                  totalPages={lowStockTotalPages}
+                  onPrevious={() =>
+                    setLowStockPage((page) => Math.max(1, page - 1))
+                  }
+                  onNext={() =>
+                    setLowStockPage((page) =>
+                      Math.min(lowStockTotalPages, page + 1),
+                    )
+                  }
+                />
               </div>
             </CardContent>
           </Card>
@@ -1173,7 +1459,7 @@ export function StockManagement() {
                       <SelectItem value="all">
                         All Locations
                       </SelectItem>
-                      {warehouseLocations.map((loc) => (
+                      {locationOptions.map((loc) => (
                         <SelectItem key={loc} value={loc}>
                           {loc}
                         </SelectItem>
@@ -1197,18 +1483,11 @@ export function StockManagement() {
                       <SelectItem value="all">
                         All Status
                       </SelectItem>
-                      <SelectItem value="healthy">
-                        Healthy
-                      </SelectItem>
-                      <SelectItem value="low">
-                        Low Stock
-                      </SelectItem>
-                      <SelectItem value="critical">
-                        Critical
-                      </SelectItem>
-                      <SelectItem value="overstock">
-                        Overstock
-                      </SelectItem>
+                      {statusOptions.map((status) => (
+                        <SelectItem key={status} value={status}>
+                          {status.replace(/_/g, " ")}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -1230,64 +1509,99 @@ export function StockManagement() {
                           Stock Transfer Request
                         </DialogTitle>
                         <DialogDescription className="text-[#6B7280]">
-                          Transfer stock between warehouse
-                          locations
+                          Transfer stock between warehouse locations
                         </DialogDescription>
                       </DialogHeader>
                       <div className="space-y-4 py-4">
                         <div>
                           <Label>Product</Label>
-                          <Select>
-                            <SelectTrigger className="mt-2 border-[#111827]/10">
-                              <SelectValue placeholder="Select product..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {mockStock.map((item) => (
-                                <SelectItem
-                                  key={item.id}
-                                  value={item.id}
-                                >
-                                  {item.name} ({item.sku})
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <SearchableProductSelect
+                            options={realStock.map((item) => ({
+                              sku: item.id,
+                              name: `${item.name} (${item.sku})`,
+                            }))}
+                            value={transferForm.productId}
+                            onChange={(v) =>
+                              setTransferForm((p) => ({
+                                ...p,
+                                productId: v,
+                              }))
+                            }
+                            placeholder="Type or select product..."
+                            className="mt-2"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <Label>From Location (Bin)</Label>
+                            <Select
+                              value={transferForm.fromBinId}
+                              onValueChange={(v) =>
+                                setTransferForm((p) => ({
+                                  ...p,
+                                  fromBinId: v,
+                                }))
+                              }
+                            >
+                              <SelectTrigger className="mt-2 border-[#111827]/10">
+                                <SelectValue placeholder="Select source..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {bins.map((b) => (
+                                  <SelectItem
+                                    key={b.id}
+                                    value={b.id}
+                                  >
+                                    {b.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label>To Location (Bin)</Label>
+                            <Select
+                              value={transferForm.toBinId}
+                              onValueChange={(v) =>
+                                setTransferForm((p) => ({
+                                  ...p,
+                                  toBinId: v,
+                                }))
+                              }
+                            >
+                              <SelectTrigger id="transfer-to-bin-select" name="toBinId" className="mt-2 border-[#111827]/10">
+                                <SelectValue placeholder="Select destination..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {bins.map((b) => (
+                                  <SelectItem
+                                    key={b.id}
+                                    value={b.id}
+                                  >
+                                    {b.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
                         </div>
                         <div>
-                          <Label>From Location</Label>
-                          <Select>
-                            <SelectTrigger className="mt-2 border-[#111827]/10">
-                              <SelectValue placeholder="Select source..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {warehouseLocations.map((loc) => (
-                                <SelectItem
-                                  key={loc}
-                                  value={loc}
-                                >
-                                  {loc}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div>
-                          <Label>To Location</Label>
-                          <Select>
-                            <SelectTrigger className="mt-2 border-[#111827]/10">
-                              <SelectValue placeholder="Select destination..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {warehouseLocations.map((loc) => (
-                                <SelectItem
-                                  key={loc}
-                                  value={loc}
-                                >
-                                  {loc}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <Label>Quantity to Transfer</Label>
+                          <Input
+                            id="transfer-qty-input"
+                            name="qty"
+                            type="number"
+                            placeholder="0"
+                            className="mt-2 border-[#111827]/10"
+                            value={transferForm.qty}
+                            onChange={(e) =>
+                              setTransferForm((p) => ({
+                                ...p,
+                                qty: e.target.value,
+                              }))
+                            }
+                            onKeyDown={blockInvalidNumberKeys}
+                          />
                         </div>
                       </div>
                       <div className="flex gap-3 justify-end">
@@ -1302,9 +1616,10 @@ export function StockManagement() {
                         </Button>
                         <Button
                           onClick={handleStockTransfer}
+                          disabled={submitting}
                           className="bg-[#00A3AD] hover:bg-[#0891B2] text-white"
                         >
-                          Initiate Transfer
+                          {submitting ? "Processing…" : "Initiate Transfer"}
                         </Button>
                       </div>
                     </DialogContent>
@@ -1334,9 +1649,7 @@ export function StockManagement() {
                       <th className="text-left py-4 px-4 text-sm font-semibold text-[#111827] bg-[#F8FAFC]">
                         Location
                       </th>
-                      <th className="text-left py-4 px-4 text-sm font-semibold text-[#111827] bg-[#F8FAFC]">
-                        Zone/Aisle/Bin
-                      </th>
+
                       <th className="text-right py-4 px-4 text-sm font-semibold text-[#111827] bg-[#F8FAFC]">
                         Current
                       </th>
@@ -1349,10 +1662,13 @@ export function StockManagement() {
                       <th className="text-left py-4 px-4 text-sm font-semibold text-[#111827] bg-[#F8FAFC]">
                         Last Restocked
                       </th>
+                      <th className="text-right py-4 px-4 text-sm font-semibold text-[#111827] bg-[#F8FAFC]">
+                        Actions
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredStock.map((item) => (
+                    {pagedStock.map((item) => (
                       <tr
                         key={item.id}
                         className="border-b border-[#E5E7EB] hover:bg-[#F8FAFC] transition-colors"
@@ -1368,10 +1684,7 @@ export function StockManagement() {
                         <td className="py-4 px-4 text-sm text-[#6B7280]">
                           {item.location}
                         </td>
-                        <td className="py-4 px-4 text-sm text-[#6B7280]">
-                          {item.zone} • {item.aisle} •{" "}
-                          {item.bin}
-                        </td>
+
                         <td className="py-4 px-4 text-right">
                           <span
                             className={`font-bold ${
@@ -1399,10 +1712,57 @@ export function StockManagement() {
                         <td className="py-4 px-4 text-sm text-[#6B7280]">
                           {item.lastRestocked}
                         </td>
+                        <td className="py-4 px-4 text-right">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-[#00A3AD] text-[#00A3AD] hover:bg-[#00A3AD]/10 h-8 py-0 px-2.5"
+                            onClick={() => {
+                              setSelectedBinForQR(item);
+                              setShowBinQRModal(true);
+                            }}
+                          >
+                            <Printer className="w-4 h-4 mr-1.5 inline-block" />
+                            Print Bin QR
+                          </Button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="flex items-center justify-between border-t border-[#E5E7EB] px-4 py-4">
+                <span className="text-xs text-[#6B7280]">
+                  Page {stockPage} of {stockTotalPages}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setStockPage((page) => Math.max(1, page - 1))
+                    }
+                    disabled={stockPage <= 1}
+                    className="border-[#111827]/20 text-[#111827]"
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setStockPage((page) =>
+                        Math.min(stockTotalPages, page + 1),
+                      )
+                    }
+                    disabled={stockPage >= stockTotalPages}
+                    className="border-[#111827]/20 text-[#111827]"
+                  >
+                    Next
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -1416,8 +1776,7 @@ export function StockManagement() {
                 Manual Stock Adjustment
               </h2>
               <p className="text-sm text-[#6B7280] mt-1">
-                Adjustments are saved as Pending until a Manager
-                approves
+                Adjustments are saved as Pending until a Manager approves
               </p>
             </div>
             {pendingCount > 0 && (
@@ -1431,7 +1790,6 @@ export function StockManagement() {
             )}
           </div>
 
-          {/* Adjustment Sub-tabs */}
           <div className="bg-[#F8FAFC] border border-[#E5E7EB] rounded-lg p-1 flex gap-1">
             {(["request", "pending", "history"] as const).map(
               (t) => (
@@ -1461,7 +1819,6 @@ export function StockManagement() {
             )}
           </div>
 
-          {/* REQUEST FORM */}
           {adjustmentTab === "request" && (
             <Card className="bg-white border-[#1A2B47]/10">
               <CardHeader className="bg-[#1A2B47]/5">
@@ -1470,7 +1827,6 @@ export function StockManagement() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-6 space-y-6">
-                {/* Product Selection */}
                 <div className="space-y-2">
                   <Label className="text-[#1A2B47] font-medium">
                     Product{" "}
@@ -1501,7 +1857,6 @@ export function StockManagement() {
                   </Select>
                 </div>
 
-                {/* Stock Preview */}
                 {form.product_id > 0 && (
                   <div className="bg-[#F8FAFC] border border-[#E5E7EB] rounded-lg p-4 flex items-center gap-6">
                     <div>
@@ -1536,7 +1891,6 @@ export function StockManagement() {
                   </div>
                 )}
 
-                {/* Qty Change & Category */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label className="text-[#1A2B47] font-medium">
@@ -1547,12 +1901,27 @@ export function StockManagement() {
                       type="number"
                       placeholder="e.g. -5 or +10"
                       value={form.qty_change}
-                      onChange={f("qty_change")}
+                      onChange={(e) => {
+                        setRequestError("");
+                        f("qty_change")(e);
+                      }}
+                      step="1"
+                      inputMode="numeric"
+                      onKeyDown={(e) =>
+                        blockInvalidNumberKeys(e, {
+                          allowNegative: true,
+                        })
+                      }
                       className="border-[#1A2B47]/20"
                     />
                     <p className="text-xs text-[#6B7280]">
                       Negative = remove · Positive = add
                     </p>
+                    {requestError && (
+                      <p className="text-xs text-[#DC2626]">
+                        {requestError}
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label className="text-[#1A2B47] font-medium">
@@ -1582,7 +1951,6 @@ export function StockManagement() {
                   </div>
                 </div>
 
-                {/* Reason */}
                 <div className="space-y-2">
                   <Label className="text-[#1A2B47] font-medium">
                     Reason / Notes{" "}
@@ -1612,7 +1980,6 @@ export function StockManagement() {
                   </p>
                 </div>
 
-                {/* Requested By */}
                 <div className="space-y-2">
                   <Label className="text-[#1A2B47] font-medium">
                     Requested By{" "}
@@ -1626,7 +1993,6 @@ export function StockManagement() {
                   />
                 </div>
 
-                {/* Info + Submit */}
                 <div className="flex items-start gap-4">
                   <div className="flex-1 bg-[#00A3AD]/10 border border-[#00A3AD]/20 rounded-lg p-4 text-sm text-[#1A2B47]">
                     ⓘ This will be logged as{" "}
@@ -1653,7 +2019,6 @@ export function StockManagement() {
             </Card>
           )}
 
-          {/* PENDING APPROVALS */}
           {adjustmentTab === "pending" && (
             <Card className="bg-white border-[#1A2B47]/10">
               <CardHeader className="bg-[#F97316]/5">
@@ -1721,7 +2086,7 @@ export function StockManagement() {
                           </span>
                         </div>
                         <p className="text-sm text-[#6B7280] italic">
-                          &quot;{a.reason}&quot;
+                          "{a.reason}"
                         </p>
                         <div className="flex gap-2">
                           <Button
@@ -1765,13 +2130,11 @@ export function StockManagement() {
             </Card>
           )}
 
-          {/* HISTORY */}
           {adjustmentTab === "history" && (
             <Card className="bg-white border-[#1A2B47]/10">
               <CardHeader className="bg-[#1A2B47]/5">
                 <CardTitle className="text-[#1A2B47] text-sm font-semibold uppercase tracking-wide">
-                  Adjustment History — logged as &quot;Manual
-                  Adjustment&quot;
+                  Adjustment History
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-6">
@@ -1876,16 +2239,32 @@ export function StockManagement() {
           )}
         </TabsContent>
 
-        {/* MOVEMENT & VALUATION TAB */}
         <TabsContent value="movements" className="space-y-6">
-          <MovementReport />
+          <MovementReport key={movementRefreshKey} />
         </TabsContent>
 
-        {/* VALUATION REPORT TAB */}
-        <TabsContent value="valuation" className="space-y-6">
-          <ValuationReport />
+        <TabsContent value="evaluation" className="space-y-6">
+          <EvaluationReport key="evaluation-report-v1" />
         </TabsContent>
       </Tabs>
+      {selectedBinForQR && (
+        <QRLabelModal
+          isOpen={showBinQRModal}
+          onClose={() => setShowBinQRModal(false)}
+          qrValue={`BIN:${selectedBinForQR.zone}-${selectedBinForQR.aisle}-${selectedBinForQR.bin}`}
+          title={`Bin: ${selectedBinForQR.zone}-${selectedBinForQR.aisle}-${selectedBinForQR.bin}`}
+          subtitle="Bin Location QR Label"
+          fields={[
+            { label: "BIN LOCATION", value: `${selectedBinForQR.zone}-${selectedBinForQR.aisle}-${selectedBinForQR.bin}` },
+            { label: "ZONE", value: selectedBinForQR.zone },
+            { label: "AISLE", value: selectedBinForQR.aisle },
+            { label: "BIN", value: selectedBinForQR.bin },
+            { label: "ASSIGNED SKU", value: selectedBinForQR.sku || "N/A" },
+            { label: "PRODUCT NAME", value: selectedBinForQR.name || "N/A" },
+            { label: "STOCK QUANTITY", value: `${selectedBinForQR.currentStock || 0} units` },
+          ]}
+        />
+      )}
     </div>
   );
 }

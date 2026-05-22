@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ChevronDown,
@@ -25,8 +25,11 @@ import {
   SelectValue,
 } from "../ui/select";
 import { toast } from "sonner";
-import { projectId, publicAnonKey } from "@/utils/supabase/info";
-import { supabase } from "@/lib/supabase";
+import {
+  fetchDiscrepancyReportsSummary,
+  fetchShipmentDiscrepancies,
+  updateShipmentDiscrepancyDisposition,
+} from "@/lib/discrepancyQcService";
 import {
   Bar,
   BarChart,
@@ -36,6 +39,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -58,8 +62,6 @@ type ShipmentDiscrepancy = {
   [key: string]: unknown;
 };
 
-type QcInspectionRow = Record<string, unknown>;
-
 const normalizeStatus = (
   rawStatus: string | null | undefined,
 ) => {
@@ -74,12 +76,31 @@ const formatMaybeNumber = (value: unknown) => {
   return num.toLocaleString();
 };
 
+/**
+ * Normalise a row from the Quality DB so that the display-layer keys
+ * (sku, expected_qty, received_qty, …) are always populated regardless
+ * of whether the upstream insert used the Quality-schema names
+ * (product_sku, system_count, physical_count, …) or the Fulfillment-schema names.
+ */
+const normalizeRow = (row: ShipmentDiscrepancy): ShipmentDiscrepancy => ({
+  ...row,
+  sku: row.sku ?? (row as any).product_sku ?? null,
+  expected_qty:
+    row.expected_qty ?? (row as any).system_count ?? null,
+  received_qty:
+    row.received_qty ?? (row as any).physical_count ?? null,
+  discrepancy_reason:
+    row.discrepancy_reason ?? (row as any).reason_code ?? null,
+  notes: row.notes ?? (row as any).review_notes ?? null,
+  image_urls:
+    row.image_urls ?? (row as any).evidence_urls ?? null,
+});
+
 const extractImageUrls = (
   row: ShipmentDiscrepancy | null,
 ): string[] => {
   if (!row) return [];
-  const raw =
-    row.image_urls ?? row["image_url"] ?? row["images"];
+  const raw = row.image_urls ?? (row as any).evidence_urls ?? row["image_url"] ?? row["images"];
   if (!raw) return [];
 
   if (Array.isArray(raw)) {
@@ -120,6 +141,12 @@ export function DiscrepancyApprovals() {
     pass: 0,
     fail: 0,
   });
+  const [resolutionCountsState, setResolutionCountsState] = useState({
+    pending: 0,
+    in_review: 0,
+    resolved: 0,
+    rejected: 0,
+  });
   const [supplierDefects, setSupplierDefects] = useState<
     Array<{ name: string; defects: number; id: string }>
   >([]);
@@ -140,31 +167,22 @@ export function DiscrepancyApprovals() {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isExportingExcel, setIsExportingExcel] =
     useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 10;
 
-  const fetchDiscrepancies = async () => {
+  const fetchDiscrepancies = useCallback(async () => {
     setIsLoading(true);
     try {
-      const url =
-        `https://${projectId}.supabase.co/rest/v1/shipment_discrepancies` +
-        `?select=*` +
-        `&status=neq.approved` +
-        `&order=created_at.desc`;
-
-      const res = await fetch(url, {
-        headers: {
-          apikey: publicAnonKey,
-          Authorization: `Bearer ${publicAnonKey}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!res.ok) throw new Error(await res.text());
-
-      const data = (await res.json()) as ShipmentDiscrepancy[];
+      const raw = (await fetchShipmentDiscrepancies({
+        excludeApproved: false,
+      })) as ShipmentDiscrepancy[];
+      const data = raw.map(normalizeRow);
       setDiscrepancies(data);
-      if (!selectedDetail && data.length > 0) {
-        setSelectedDetail(data[0]);
-      }
+      setSelectedDetail((prev) => {
+        if (data.length === 0) return null;
+        if (!prev) return data[0];
+        return data.find((row) => row.id === prev.id) ?? data[0];
+      });
     } catch (err) {
       toast.error("Failed to load discrepancies", {
         description:
@@ -173,7 +191,7 @@ export function DiscrepancyApprovals() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   const applyLocalUpdate = (
     id: string,
@@ -196,32 +214,14 @@ export function DiscrepancyApprovals() {
     if (!row?.id) return;
     setIsUpdatingId(row.id);
     try {
-      const payload = {
+      await updateShipmentDiscrepancyDisposition(row.id, action);
+      applyLocalUpdate(row.id, {
         disposition: action,
-      };
-
-      const res = await fetch(
-        `https://${projectId}.supabase.co/rest/v1/shipment_discrepancies?id=eq.${row.id}`,
-        {
-          method: "PATCH",
-          headers: {
-            apikey: publicAnonKey,
-            Authorization: `Bearer ${publicAnonKey}`,
-            "Content-Type": "application/json",
-            Prefer: "return=minimal",
-          },
-          body: JSON.stringify(payload),
-        },
-      );
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(errText);
-      }
-
-      applyLocalUpdate(row.id, payload);
+        status: "resolved",
+      });
+      void Promise.all([fetchDiscrepancies(), loadReports()]);
       toast.success("Disposition updated", {
-        description: `Marked as ${action}.`,
+        description: `Marked as ${action} and resolved.`,
       });
     } catch (err) {
       toast.error("Failed to update disposition", {
@@ -233,64 +233,15 @@ export function DiscrepancyApprovals() {
     }
   };
 
-  const loadReports = async () => {
+  const loadReports = useCallback(async () => {
     setIsReportsLoading(true);
     try {
-      const [qcRes, discrepanciesRes] = await Promise.all([
-        supabase.from("qc_inspections").select("*"),
-        supabase.from("shipment_discrepancies").select("*"),
-      ]);
-
-      if (qcRes.error) throw qcRes.error;
-      if (discrepanciesRes.error) throw discrepanciesRes.error;
-
-      const qcRows = (qcRes.data ?? []) as QcInspectionRow[];
-      const qcTotals = { pass: 0, fail: 0 };
-
-      qcRows.forEach((row) => {
-        const raw = (row.result ??
-          row.status ??
-          row.outcome ??
-          row.qc_status ??
-          row.decision ??
-          "") as string;
-        const value = String(raw).toLowerCase();
-        if (value.includes("pass")) qcTotals.pass += 1;
-        if (
-          value.includes("fail") ||
-          value.includes("reject")
-        ) {
-          qcTotals.fail += 1;
-        }
-      });
-
-      const discrepancyRows = (discrepanciesRes.data ??
-        []) as ShipmentDiscrepancy[];
-      const supplierMap = new Map<string, number>();
-
-      discrepancyRows.forEach((row) => {
-        const name =
-          (row["supplier_name"] as string | undefined) ??
-          (row["vendor_name"] as string | undefined) ??
-          (row["supplier"] as string | undefined) ??
-          (row["vendor"] as string | undefined) ??
-          row.reported_by ??
-          "Unknown Supplier";
-        const key = name || "Unknown Supplier";
-        supplierMap.set(key, (supplierMap.get(key) ?? 0) + 1);
-      });
-
-      const supplierData = Array.from(supplierMap.entries())
-        .map(([name, defects]) => ({ name, defects }))
-        .sort((a, b) => b.defects - a.defects)
-        .slice(0, 6)
-        .map((item, index) => ({
-          ...item,
-          id: `${item.name}-${index}`,
-        }));
-
-      setQcSummary(qcTotals);
-      setSupplierDefects(supplierData);
+      const summary = await fetchDiscrepancyReportsSummary();
+      setQcSummary(summary.qc_summary);
+      setSupplierDefects(summary.supplier_defects);
+      if (summary.resolution_counts) {
+        setResolutionCountsState(summary.resolution_counts);
+      }
     } catch (err) {
       toast.error("Failed to load quality reports", {
         description:
@@ -299,12 +250,17 @@ export function DiscrepancyApprovals() {
     } finally {
       setIsReportsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchDiscrepancies();
-    loadReports();
-  }, []);
+    void Promise.all([fetchDiscrepancies(), loadReports()]);
+
+    const intervalId = window.setInterval(() => {
+      void Promise.all([fetchDiscrepancies(), loadReports()]);
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [fetchDiscrepancies, loadReports]);
 
   const statusOptions = useMemo(() => {
     const unique = new Set<string>();
@@ -317,12 +273,16 @@ export function DiscrepancyApprovals() {
   const filteredDiscrepancies = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
     return discrepancies.filter((row) => {
-      if (
-        statusFilter !== "all" &&
-        normalizeStatus(row.status) !== statusFilter
-      ) {
-        return false;
+      const status = normalizeStatus(row.status);
+
+      // Filter logic
+      if (statusFilter !== "all") {
+        if (status !== statusFilter) return false;
+      } else {
+        // Default view: hide resolved/approved items so they "go away" from the list
+        if (status === "resolved" || status === "approved") return false;
       }
+
       if (!keyword) return true;
       const haystack = [
         row.id,
@@ -330,6 +290,7 @@ export function DiscrepancyApprovals() {
         row.shipment_id,
         row.po_number,
         row.sku,
+        (row as any).product_sku,
         row.product_name,
         row.reported_by,
       ]
@@ -339,6 +300,25 @@ export function DiscrepancyApprovals() {
       return haystack.includes(keyword);
     });
   }, [discrepancies, searchTerm, statusFilter]);
+
+  // Reset to page 1 whenever filter or search changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter]);
+
+  const discrepancyTotalPages = Math.max(
+    1,
+    Math.ceil(filteredDiscrepancies.length / PAGE_SIZE),
+  );
+
+  const pagedDiscrepancies = useMemo(
+    () =>
+      filteredDiscrepancies.slice(
+        (currentPage - 1) * PAGE_SIZE,
+        currentPage * PAGE_SIZE,
+      ),
+    [filteredDiscrepancies, currentPage],
+  );
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -424,6 +404,7 @@ export function DiscrepancyApprovals() {
         body: [
           ["Pending", String(statusCounts.pending ?? 0)],
           ["In Review", String(statusCounts.in_review ?? 0)],
+          ["Resolved", String(statusCounts.resolved ?? 0)],
           ["Rejected", String(statusCounts.rejected ?? 0)],
           ["QC Pass", String(qcSummary.pass)],
           ["QC Fail", String(qcSummary.fail)],
@@ -533,48 +514,7 @@ export function DiscrepancyApprovals() {
     }
   };
 
-  const toCsvValue = (value: string | number) => {
-    const normalized = String(value ?? "");
-    if (/[",\n]/.test(normalized)) {
-      return `"${normalized.replace(/"/g, '""')}"`;
-    }
-
-    return normalized;
-  };
-
-  const buildCsvContent = (
-    title: string,
-    rows: Array<Record<string, string | number>>,
-  ) => {
-    if (rows.length === 0) {
-      return `${title}\nNo data`;
-    }
-
-    const headers = Object.keys(rows[0]);
-    const csvRows = [
-      title,
-      headers.join(","),
-      ...rows.map((row) =>
-        headers.map((header) => toCsvValue(row[header] ?? "")).join(","),
-      ),
-    ];
-
-    return csvRows.join("\n");
-  };
-
-  const triggerCsvDownload = (sections: string[], filename: string) => {
-    const blob = new Blob([sections.join("\n\n")], {
-      type: "text/csv;charset=utf-8;",
-    });
-    const downloadUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = downloadUrl;
-    anchor.download = filename;
-    anchor.click();
-    URL.revokeObjectURL(downloadUrl);
-  };
-
-  const handleExportExcel = async () => {
+  const handleExportExcel = () => {
     setIsExportingExcel(true);
     try {
       const overviewRows = [
@@ -582,6 +522,10 @@ export function DiscrepancyApprovals() {
         {
           metric: "In Review",
           value: statusCounts.in_review ?? 0,
+        },
+        {
+          metric: "Resolved",
+          value: statusCounts.resolved ?? 0,
         },
         {
           metric: "Rejected",
@@ -634,21 +578,34 @@ export function DiscrepancyApprovals() {
         defects: row.defects,
       }));
 
-      triggerCsvDownload(
-        [
-          buildCsvContent("Overview", overviewRows),
-          buildCsvContent("Discrepancies", discrepancyRows),
-          buildCsvContent("Supplier Defects", supplierRows),
-        ],
-        `discrepancies-report-${exportTimestamp}.csv`,
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(
+        workbook,
+        XLSX.utils.json_to_sheet(overviewRows),
+        "Overview",
+      );
+      XLSX.utils.book_append_sheet(
+        workbook,
+        XLSX.utils.json_to_sheet(discrepancyRows),
+        "Discrepancies",
+      );
+      XLSX.utils.book_append_sheet(
+        workbook,
+        XLSX.utils.json_to_sheet(supplierRows),
+        "Supplier Defects",
       );
 
-      toast.success("CSV exported", {
+      XLSX.writeFile(
+        workbook,
+        `discrepancies-report-${exportTimestamp}.xlsx`,
+      );
+
+      toast.success("Excel exported", {
         description:
-          "The discrepancies report has been downloaded.",
+          "The discrepancies workbook has been downloaded.",
       });
     } catch (err) {
-      toast.error("CSV export failed", {
+      toast.error("Excel export failed", {
         description:
           err instanceof Error
             ? err.message
@@ -688,8 +645,8 @@ export function DiscrepancyApprovals() {
           >
             <Download className="w-4 h-4 mr-2" />
             {isExportingExcel
-              ? "Exporting CSV..."
-              : "Export CSV"}
+              ? "Exporting Excel..."
+              : "Export Excel"}
           </Button>
           <div className="relative">
             <Search className="w-4 h-4 text-[#9CA3AF] absolute left-3 top-1/2 -translate-y-1/2" />
@@ -805,7 +762,7 @@ export function DiscrepancyApprovals() {
             )}
           </Card>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Card className="bg-white border-[#111827]/10">
               <CardContent className="pt-6">
                 <div className="flex items-center gap-3">
@@ -836,6 +793,24 @@ export function DiscrepancyApprovals() {
                     </div>
                     <div className="text-sm text-[#6B7280]">
                       In Review
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-white border-[#111827]/10">
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-lg bg-[#10B981]/10 flex items-center justify-center">
+                    <Package className="w-6 h-6 text-[#10B981]" />
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-[#111827]">
+                      {statusCounts.resolved ?? 0}
+                    </div>
+                    <div className="text-sm text-[#6B7280]">
+                      Resolved
                     </div>
                   </div>
                 </div>
@@ -922,7 +897,7 @@ export function DiscrepancyApprovals() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredDiscrepancies.map((row) => {
+                    {pagedDiscrepancies.map((row) => {
                       const expectedQty = Number(
                         row.expected_qty,
                       );
@@ -1038,6 +1013,38 @@ export function DiscrepancyApprovals() {
                     })}
                   </tbody>
                 </table>
+                <div className="flex items-center justify-between px-4 py-4 border-t border-[#E5E7EB] bg-white">
+                  <div className="text-xs text-[#6B7280]">
+                    Page {currentPage} of {discrepancyTotalPages} &mdash;{" "}
+                    {filteredDiscrepancies.length} result{filteredDiscrepancies.length !== 1 ? "s" : ""}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-[#111827]/20 text-[#111827]"
+                      onClick={() =>
+                        setCurrentPage((prev) => Math.max(1, prev - 1))
+                      }
+                      disabled={currentPage <= 1}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-[#111827]/20 text-[#111827]"
+                      onClick={() =>
+                        setCurrentPage((prev) =>
+                          Math.min(discrepancyTotalPages, prev + 1),
+                        )
+                      }
+                      disabled={currentPage >= discrepancyTotalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
               </div>
             )}
           </CardContent>
@@ -1071,7 +1078,7 @@ export function DiscrepancyApprovals() {
             </div>
 
             <div className="px-6 py-5 space-y-5">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="rounded-md border border-[#E5E7EB] p-3">
                   <p className="text-xs text-[#6B7280]">
                     Discrepancy ID
@@ -1086,19 +1093,6 @@ export function DiscrepancyApprovals() {
                     {normalizeStatus(
                       selectedDetail.status,
                     ).replace(/_/g, " ")}
-                  </p>
-                </div>
-                <div className="rounded-md border border-[#E5E7EB] p-3">
-                  <p className="text-xs text-[#6B7280]">
-                    Disposition
-                  </p>
-                  <p className="font-semibold text-[#111827] capitalize">
-                    {selectedDetail.disposition
-                      ? selectedDetail.disposition.replace(
-                          /_/g,
-                          " ",
-                        )
-                      : "Unassigned"}
                   </p>
                 </div>
               </div>
@@ -1275,7 +1269,7 @@ export function DiscrepancyApprovals() {
                       )
                     }
                     disabled={
-                      isUpdatingId === selectedDetail.id
+                      isUpdatingId === selectedDetail.id || normalizeStatus(selectedDetail.status) === "resolved"
                     }
                   >
                     Release
@@ -1289,7 +1283,7 @@ export function DiscrepancyApprovals() {
                       )
                     }
                     disabled={
-                      isUpdatingId === selectedDetail.id
+                      isUpdatingId === selectedDetail.id || normalizeStatus(selectedDetail.status) === "resolved"
                     }
                   >
                     Return
@@ -1303,7 +1297,7 @@ export function DiscrepancyApprovals() {
                       )
                     }
                     disabled={
-                      isUpdatingId === selectedDetail.id
+                      isUpdatingId === selectedDetail.id || normalizeStatus(selectedDetail.status) === "resolved"
                     }
                   >
                     Scrap

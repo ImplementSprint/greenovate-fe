@@ -1,4 +1,4 @@
-import { getNextPublicEnv } from "./public-env";
+import { supabaseSCM } from "./supabase";
 
 export type SupplierRecord = {
   id: string;
@@ -34,11 +34,34 @@ export type SupplierScorecard = {
   risk_summary?: string | null;
 };
 
-const getSupplierServiceBaseUrl = () =>
-  getNextPublicEnv(
-    "NEXT_PUBLIC_SUPPLIER_SERVICE_URL",
-    "http://localhost:4001",
-  );
+export type CreateSupplierPayload = {
+  supplier_name: string;
+  contact_person: string;
+  email: string;
+  phone: string;
+  address: string;
+  currency_code: string;
+  lead_time_days?: number | null;
+  status?: string;
+};
+
+const supplierServiceBaseUrl =
+  process.env.NEXT_PUBLIC_SUPPLIER_SERVICE_URL ||
+  process.env.VITE_SUPPLIER_SERVICE_URL ||
+  "http://localhost:4001";
+
+// Add a robust fallback in case the env var was set to an empty string, a relative path, or just a port
+const getBaseUrl = () => {
+  if (
+    !supplierServiceBaseUrl || 
+    supplierServiceBaseUrl.trim() === "" ||
+    !supplierServiceBaseUrl.startsWith("http")
+  ) {
+    return "http://localhost:4001";
+  }
+  return supplierServiceBaseUrl;
+};
+
 
 const parseError = async (response: Response) => {
   const text = await response.text();
@@ -54,25 +77,48 @@ const parseError = async (response: Response) => {
   }
 };
 
+const shouldBypassFetch = () => {
+  if (typeof window !== "undefined") {
+    return window.localStorage.getItem("USE_REAL_SERVICES") !== "true";
+  }
+  return true;
+};
+
 export const fetchSuppliers = async (search = "") => {
-  const url = new URL(
-    `${getSupplierServiceBaseUrl()}/suppliers`,
-  );
-
-  if (search.trim()) {
-    url.searchParams.set("search", search.trim());
+  if (shouldBypassFetch()) {
+    console.log("ℹ️ Supplier Service is offline. Using direct Supabase fallback.");
+    let query = supabaseSCM.from("suppliers").select("*").eq("status", "Active");
+    if (search.trim()) {
+      query = query.ilike("supplier_name", `%${search.trim()}%`);
+    }
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data || [];
   }
 
-  const response = await fetch(url.toString());
-  if (!response.ok) {
-    throw new Error(await parseError(response));
+  try {
+    const url = new URL(`${getBaseUrl()}/suppliers`);
+    if (search.trim()) {
+      url.searchParams.set("search", search.trim());
+    }
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      throw new Error(await parseError(response));
+    }
+
+    const payload = (await response.json()) as { data: SupplierRecord[] };
+    return payload.data;
+  } catch (error: any) {
+    console.log("ℹ️ Supplier Service is offline. Using direct Supabase fallback.");
+    let query = supabaseSCM.from("suppliers").select("*").eq("status", "Active");
+    if (search.trim()) {
+      query = query.ilike("supplier_name", `%${search.trim()}%`);
+    }
+    const { data, error: dbError } = await query;
+    if (dbError) throw new Error(dbError.message);
+    return data || [];
   }
-
-  const payload = (await response.json()) as {
-    data: SupplierRecord[];
-  };
-
-  return payload.data;
 };
 
 export const fetchSupplierScorecard = async (
@@ -81,52 +127,95 @@ export const fetchSupplierScorecard = async (
   const normalized = supplierName.trim();
   if (!normalized) return null;
 
-  const url = new URL(
-    `${getSupplierServiceBaseUrl()}/supplier-scorecards`,
-  );
-  url.searchParams.set("supplier_name", normalized);
-
-  const response = await fetch(url.toString());
-  if (response.status === 404) {
-    return null;
+  if (shouldBypassFetch()) {
+    return null; // Simplified fallback since scorecard is complex
   }
 
-  if (!response.ok) {
-    throw new Error(await parseError(response));
+  try {
+    const url = new URL(`${getBaseUrl()}/supplier-scorecards`);
+    url.searchParams.set("supplier_name", normalized);
+
+    const response = await fetch(url.toString());
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(await parseError(response));
+
+    const payload = (await response.json()) as { data: SupplierScorecard | null };
+    return payload.data;
+  } catch {
+    return null; // Fallback gracefully if offline
   }
-
-  const payload = (await response.json()) as {
-    data: SupplierScorecard | null;
-  };
-
-  return payload.data;
 };
 
 export const fetchSupplierByName = async (
   supplierName: string,
 ) => {
   const normalized = supplierName.trim();
-  if (!normalized) {
-    return null;
+  if (!normalized) return null;
+
+  if (shouldBypassFetch()) {
+    const { data, error } = await supabaseSCM
+      .from("suppliers")
+      .select("*")
+      .ilike("supplier_name", normalized)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data;
   }
 
-  const url = new URL(
-    `${getSupplierServiceBaseUrl()}/suppliers/lookup`,
-  );
-  url.searchParams.set("name", normalized);
+  try {
+    const url = new URL(`${getBaseUrl()}/suppliers/lookup`);
+    url.searchParams.set("name", normalized);
 
-  const response = await fetch(url.toString());
-  if (response.status === 404) {
-    return null;
+    const response = await fetch(url.toString());
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(await parseError(response));
+
+    const payload = (await response.json()) as { data: SupplierRecord | null };
+    return payload.data;
+  } catch (error: any) {
+    const { data, error: dbError } = await supabaseSCM
+      .from("suppliers")
+      .select("*")
+      .ilike("supplier_name", normalized)
+      .limit(1)
+      .maybeSingle();
+    if (dbError) throw new Error(dbError.message);
+    return data;
+  }
+};
+
+export const createSupplier = async (
+  payload: CreateSupplierPayload,
+) => {
+  if (shouldBypassFetch()) {
+    const { data, error } = await supabaseSCM
+      .from("suppliers")
+      .insert(payload)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
   }
 
-  if (!response.ok) {
-    throw new Error(await parseError(response));
+  try {
+    const response = await fetch(`${getBaseUrl()}/suppliers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) throw new Error(await parseError(response));
+
+    const parsed = (await response.json()) as { data: SupplierRecord };
+    return parsed.data;
+  } catch (error: any) {
+    const { data, dbError } = await supabaseSCM
+      .from("suppliers")
+      .insert(payload)
+      .select()
+      .single() as any;
+    if (dbError) throw new Error(dbError.message);
+    return data;
   }
-
-  const payload = (await response.json()) as {
-    data: SupplierRecord | null;
-  };
-
-  return payload.data;
 };
