@@ -372,7 +372,7 @@ export function StockManagement() {
       Promise.all([
         listCatalogProducts({ limit: 500 }).then((data) =>
           setProducts(
-            data.map((row) => ({
+            data.map((row: any) => ({
               product_id: row.product_id,
               sku: row.sku,
               product_name: row.product_name,

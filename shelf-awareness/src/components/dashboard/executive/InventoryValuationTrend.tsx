@@ -17,7 +17,7 @@ const formatDateLabel = (value: string) =>
 
 const renderAnomalyDot = (props: any) => {
   if (!props.payload?.isAnomaly) {
-    return null;
+    return <g key={`empty-${props.cx}-${props.cy}`} />;
   }
 
   const dotKey = props.payload?.date ?? props.index ?? `${props.cx}-${props.cy}`;

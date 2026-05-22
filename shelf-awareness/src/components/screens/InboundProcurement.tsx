@@ -404,7 +404,7 @@ export function InboundProcurement() {
     const data = await listCatalogProducts({ limit: 1000 });
     setCheckingSkus(false);
 
-    const existing = new Set(data.map((row) => normalizeSku(row.sku || "")));
+    const existing = new Set(data.map((row: any) => normalizeSku(row.sku || "")));
     const mismatches = new Set(
       uniqueSkus.filter((sku) => !existing.has(sku)),
     );
@@ -1527,13 +1527,13 @@ export function InboundProcurement() {
                 {false && supplierScorecard && (
                   <div
                     className={`text-sm mt-2 ${
-                      supplierScorecard.reliability_score < 70
+                      (supplierScorecard?.reliability_score ?? 100) < 70
                         ? "text-red-600"
                         : "text-green-600"
                     }`}
                   >
                     Supplier Scorecard — Reliability:{" "}
-                    {supplierScorecard.reliability_score}%
+                    {supplierScorecard?.reliability_score ?? 100}%
                   </div>
                 )}
 

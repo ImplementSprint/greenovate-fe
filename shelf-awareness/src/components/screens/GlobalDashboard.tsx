@@ -30,10 +30,10 @@ import { supabaseFulfillment } from "@/lib/supabase";
 // statCards removed
 
 export function GlobalDashboard() {
-  const [realInventory, setRealInventory] = useState([]);
+  const [realInventory, setRealInventory] = useState<any[]>([]);
   const [totalAssets, setTotalAssets] = useState(0);
-  const [orders, setOrders] = useState([]);
-  const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
   const [backordersCount, setBackordersCount] = useState(0);
 
   useEffect(() => {
@@ -101,7 +101,7 @@ export function GlobalDashboard() {
     })).slice(0, 10)
   , [realInventory]);
 
-  const formatPHP = (amount) =>
+  const formatPHP = (amount: number) =>
     new Intl.NumberFormat("en-PH", {
       style: "currency",
       currency: "PHP",

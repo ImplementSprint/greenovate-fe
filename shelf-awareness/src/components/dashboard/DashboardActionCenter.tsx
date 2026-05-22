@@ -69,7 +69,7 @@ const buildActions = (role: DashboardRole, data: DashboardAnalyticsData | null):
         href: "/stock",
         priority: "watch" as const,
       },
-      budget?.allocated > 0 && {
+      budget != null && budget.allocated > 0 && {
         title: budget.usedPct > 90 ? "Control budget pressure" : "Monitor budget headroom",
         owner: "Finance + Procurement",
         impact: `${budget.usedPct.toFixed(1)}% of current allocation is spent or committed.`,
@@ -106,7 +106,7 @@ const buildActions = (role: DashboardRole, data: DashboardAnalyticsData | null):
         href: "/stock",
         priority: "watch" as const,
       },
-    ];
+    ].filter(Boolean) as ActionItem[];
   }
 
   return [

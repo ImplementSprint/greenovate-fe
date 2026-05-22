@@ -142,7 +142,7 @@ const toReasonCode = (value: string) =>
     .replace(/^_+|_+$/g, "")
     .toUpperCase();
 
-const deriveSeverity = (units: number) => {
+const deriveSeverity = (units: number): "Minor" | "Major" | "Critical" => {
   if (units >= 20) return "Critical";
   if (units >= 5) return "Major";
   return "Minor";

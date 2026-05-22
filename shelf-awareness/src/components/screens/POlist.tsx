@@ -996,7 +996,7 @@ export function PODetailPage() {
   const isDeliveryOverdue = Boolean(
     deliveryDate &&
     deliveryDate.getTime() < Date.now() &&
-    normalizeOptional(po.transit_status) !== "received",
+    normalizeOptional(po?.transit_status) !== "received",
   );
   const daysUntilArrival =
     deliveryDate == null
@@ -1008,9 +1008,9 @@ export function PODetailPage() {
   const handleOpenTransitDialog = () => {
     const firstNextStatus = nextTransitOptions[0] ?? "";
     setTransitStatusDraft(firstNextStatus);
-    setTransitNotesDraft(po.transit_notes ?? "");
-    setCarrierNameDraft(po.carrier_name ?? "");
-    setCarrierTrackingDraft(po.carrier_tracking_ref ?? "");
+    setTransitNotesDraft(po?.transit_notes ?? "");
+    setCarrierNameDraft(po?.carrier_name ?? "");
+    setCarrierTrackingDraft(po?.carrier_tracking_ref ?? "");
     setTransitDialogOpen(true);
   };
 
