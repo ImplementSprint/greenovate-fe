@@ -1,20 +1,25 @@
-const nextJest = require("next/jest");
+const nextJest = require('next/jest');
 
 const createJestConfig = nextJest({
-  dir: "./",
+  dir: './',
 });
 
 const customJestConfig = {
-  testEnvironment: "jest-environment-jsdom",
-  roots: ["<rootDir>/tests"],
-  setupFilesAfterEnv: ["<rootDir>/jest.setup.js"],
-  testPathIgnorePatterns: ["/node_modules/", "/.next/", "<rootDir>/tests/e2e/"],
-  modulePathIgnorePatterns: ["<rootDir>/.next/"],
+  testEnvironment: 'jest-environment-jsdom',
+  roots: ['<rootDir>/tests', '<rootDir>/src'],
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  testPathIgnorePatterns: ['/node_modules/', '/.next/', '<rootDir>/tests/e2e/'],
+  modulePathIgnorePatterns: ['<rootDir>/.next/'],
   moduleNameMapper: {
-    "^@/(.*)$": "<rootDir>/src/$1",
+    '^@/(.*)$': '<rootDir>/src/$1',
   },
-  coverageReporters: ["json-summary", "text", "lcov"],
-  collectCoverage: false,
+  collectCoverage: true,
+  collectCoverageFrom: [
+    '<rootDir>/src/**/*.{ts,tsx}',
+    '!<rootDir>/src/**/*.d.ts',
+    '!<rootDir>/src/app/**/*.{ts,tsx}',
+  ],
+  coverageReporters: ['text', 'lcov', 'json-summary'],
 };
 
 module.exports = createJestConfig(customJestConfig);
