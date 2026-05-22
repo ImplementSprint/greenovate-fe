@@ -1491,7 +1491,7 @@ export function WarehouseReceiving() {
               </Button>
             </div>
             <p className="text-xs text-[#6B7280]">
-              Every valid scan increments matching line's Qty
+              Every valid scan increments the matching line&apos;s Qty
               Received by 1.
             </p>
           </CardContent>
