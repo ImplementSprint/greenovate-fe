@@ -7,7 +7,6 @@ import {
 } from "react";
 import {
   ScanBarcode,
-  Camera,
   CheckCircle,
   Package,
   Plus,
@@ -27,12 +26,19 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import {
+  blockInvalidNumberKeys,
+  isPhoneValid,
+  sanitizeIntegerInput,
+  sanitizePhoneInput,
+} from "../../lib/inputSanitizers";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+import { SearchableProductSelect } from "../shared/SearchableProductSelect";
 import {
   Dialog,
   DialogContent,
@@ -44,10 +50,33 @@ import {
   RadioGroup,
   RadioGroupItem,
 } from "../ui/radio-group";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "../ui/accordion";
 import { toast } from "sonner";
-import { projectId, publicAnonKey } from "@/utils/supabase/info";
+import { notifyDashboardDataChanged } from "@/lib/dashboardInvalidation";
 import { postGRN } from "@/utils/postGRN";
-import { supabase } from "@/lib/supabase";
+import {
+  supabaseFulfillment,
+  supabaseQuality,
+} from "@/lib/supabase";
+import {
+  fetchBackorderAlerts,
+  fetchInventoryItems,
+  receiveInventoryScan,
+} from "@/lib/inventoryService";
+import {
+  saveGrnDraft,
+  scheduleWarehouseDelivery,
+} from "@/lib/warehouseReceivingService";
+import { fetchSuppliers, type SupplierRecord } from "@/lib/supplierService";
+import {
+  listCatalogProducts,
+  type ProductCatalogRecord,
+} from "@/lib/productCatalogService";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -106,6 +135,19 @@ const createEmptyLine = (): GrnLine => ({
   expiryDate: "",
 });
 
+const toReasonCode = (value: string) =>
+  value
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+
+const deriveSeverity = (units: number) => {
+  if (units >= 20) return "Critical";
+  if (units >= 5) return "Major";
+  return "Minor";
+};
+
 export function WarehouseReceiving() {
   const [showGrnForm, setShowGrnForm] = useState(false);
   const [receivedDate, setReceivedDate] = useState(
@@ -161,9 +203,15 @@ export function WarehouseReceiving() {
   );
   const [isCameraScanning, setIsCameraScanning] =
     useState(false);
-  const [, setBackorderAlerts] = useState<BackorderAlertRow[]>([]);
+  const [backorderAlerts, setBackorderAlerts] = useState<
+    BackorderAlertRow[]
+  >([]);
   const [showDeliveryScheduleDialog, setShowDeliveryScheduleDialog] = useState(false);
   const [schedulingDelivery, setSchedulingDelivery] = useState(false);
+  const [deliveryFormErrors, setDeliveryFormErrors] = useState({
+    expected_items_count: "",
+    contact_phone: "",
+  });
   const [deliveryForm, setDeliveryForm] = useState({
     delivery_datetime: "",
     supplier_name: "",
@@ -173,6 +221,8 @@ export function WarehouseReceiving() {
     contact_phone: "",
     notes: "",
   });
+  const [suppliers, setSuppliers] = useState<SupplierRecord[]>([]);
+  const [warehouseLocations, setWarehouseLocations] = useState<string[]>([]);
   const scanInputRef = useRef<HTMLInputElement | null>(null);
   const scanVideoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
@@ -200,6 +250,44 @@ export function WarehouseReceiving() {
       inventory.filter((item) => item.status === "zero").length,
     [inventory],
   );
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadReferenceLists = async () => {
+      try {
+        const [supplierRows, productRows] = await Promise.all([
+          fetchSuppliers(),
+          listCatalogProducts({ limit: 1000 }),
+        ]);
+
+        if (!isMounted) return;
+
+        setSuppliers(supplierRows);
+        setWarehouseLocations(
+          Array.from(
+            new Set(
+              (productRows as ProductCatalogRecord[])
+                .map((product) => product.warehouse_location?.trim())
+                .filter((location): location is string => Boolean(location)),
+            ),
+          ).sort((a, b) => a.localeCompare(b)),
+        );
+      } catch (error) {
+        console.error("Failed to load warehouse reference lists:", error);
+        if (isMounted) {
+          setSuppliers([]);
+          setWarehouseLocations([]);
+        }
+      }
+    };
+
+    void loadReferenceLists();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const pagedInventory = useMemo(() => {
     const start = (inventoryPage - 1) * warehouseRowsPerPage;
@@ -231,69 +319,8 @@ export function WarehouseReceiving() {
   const fetchInventory = useCallback(async () => {
     setLoadingInventory(true);
     try {
-      const baseUrl = `https://${projectId}.supabase.co/rest/v1`;
-      const headers = {
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`,
-      };
-
-      const productsRes = await fetch(
-        `${baseUrl}/products?select=product_id,product_uuid,sku,barcode,product_name,unit,reserved_stock&order=product_name.asc`,
-        { headers },
-      );
-      if (!productsRes.ok)
-        throw new Error(
-          `products: ${productsRes.status} ${await productsRes.text()}`,
-        );
-      const products: any[] = await productsRes.json();
-
-      const iohRes = await fetch(
-        `${baseUrl}/inventory_on_hand?select=product_id,qty_on_hand,updated_at`,
-        { headers },
-      );
-      if (!iohRes.ok)
-        throw new Error(
-          `inventory_on_hand: ${iohRes.status} ${await iohRes.text()}`,
-        );
-      const onHandRows: any[] = await iohRes.json();
-
-      const onHandByProductUuid = new Map(
-        onHandRows.map((row) => [String(row.product_id), row]),
-      );
-      const onHandByProductId = new Map(
-        onHandRows.map((row) => [String(row.product_id), row]),
-      );
-
-      const items: InventoryItem[] = products.map((p) => {
-        const ioh =
-          onHandByProductUuid.get(String(p.product_uuid)) ??
-          onHandByProductId.get(String(p.product_id)) ??
-          null;
-        const qty = Number(ioh?.qty_on_hand ?? 0);
-        const status: InventoryItem["status"] =
-          qty === 0
-            ? "zero"
-            : qty < MIN_STOCK_THRESHOLD
-              ? "low"
-              : "normal";
-
-        return {
-          id: String(p.product_id),
-          productUuid: p.product_uuid
-            ? String(p.product_uuid)
-            : null,
-          sku: p.sku ?? "N/A",
-          barcode: String(p.barcode ?? ""),
-          name: p.product_name ?? "Unknown Product",
-          unit: p.unit ?? "-",
-          reservedStock: Number(p.reserved_stock ?? 0),
-          lastUpdated: ioh?.updated_at ?? null,
-          systemCount: qty,
-          status,
-        };
-      });
-
-      setInventory(items);
+      const items = await fetchInventoryItems({ limit: 500 });
+      setInventory(items as InventoryItem[]);
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : String(err);
@@ -314,23 +341,18 @@ export function WarehouseReceiving() {
     let isMounted = true;
 
     const loadBackorderAlerts = async () => {
-      const { data, error } = await supabase
-        .from("backorder_alerts")
-        .select(
-          "id, sku, message, grn_reference, pending_backorder_count, created_at",
-        )
-        .order("created_at", { ascending: false })
-        .limit(5);
-
-      if (!isMounted || error) return;
-      setBackorderAlerts(
-        (data as BackorderAlertRow[]) ?? [],
-      );
+      try {
+        const data = await fetchBackorderAlerts(5);
+        if (!isMounted) return;
+        setBackorderAlerts(data as BackorderAlertRow[]);
+      } catch {
+        if (!isMounted) return;
+      }
     };
 
     void loadBackorderAlerts();
 
-    const channel = supabase
+    const channel = supabaseFulfillment
       .channel("warehouse-backorder-alerts")
       .on(
         "postgres_changes",
@@ -356,7 +378,7 @@ export function WarehouseReceiving() {
 
     return () => {
       isMounted = false;
-      void supabase.removeChannel(channel);
+      void supabaseFulfillment.removeChannel(channel);
     };
   }, []);
 
@@ -423,11 +445,6 @@ export function WarehouseReceiving() {
 
       const digitsOnly = trimmed.replace(/\D/g, "");
       const lowerValue = trimmed.toLowerCase();
-      const headers = {
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`,
-        "Content-Type": "application/json",
-      };
       const matchedItem =
         inventory.find(
           (item) =>
@@ -469,115 +486,13 @@ export function WarehouseReceiving() {
       );
 
       try {
-        const productKeys = [
-          matchedItem.productUuid,
-          matchedItem.id,
-        ].filter(Boolean) as string[];
-
-        let synced = false;
-        let nextOnHand = matchedItem.systemCount + 1;
-
-        for (const productKey of productKeys) {
-          const lookupRes = await fetch(
-            `https://${projectId}.supabase.co/rest/v1/inventory_on_hand?select=product_id,bin_id,qty_on_hand&product_id=eq.${encodeURIComponent(productKey)}&limit=1`,
-            { method: "GET", headers },
-          );
-          if (!lookupRes.ok) continue;
-          const lookupRows = await lookupRes.json();
-          if (lookupRows.length > 0) {
-            const row = lookupRows[0];
-            nextOnHand = Number(row.qty_on_hand ?? 0) + 1;
-            const patchRes = await fetch(
-              `https://${projectId}.supabase.co/rest/v1/inventory_on_hand?product_id=eq.${encodeURIComponent(row.product_id)}&bin_id=eq.${encodeURIComponent(row.bin_id)}`,
-              {
-                method: "PATCH",
-                headers: {
-                  ...headers,
-                  Prefer: "return=minimal",
-                },
-                body: JSON.stringify({
-                  qty_on_hand: nextOnHand,
-                }),
-              },
-            );
-            if (patchRes.ok) {
-              synced = true;
-              break;
-            }
-          }
-        }
-
-        if (!synced) {
-          const insertProductKey =
-            matchedItem.productUuid || matchedItem.id;
-          const binLookupRes = await fetch(
-            `https://${projectId}.supabase.co/rest/v1/inventory_on_hand?select=bin_id&limit=1`,
-            { method: "GET", headers },
-          );
-          let binId: string | null = null;
-          if (binLookupRes.ok) {
-            const binRows = await binLookupRes.json();
-            if (binRows.length > 0) {
-              binId = String(binRows[0].bin_id);
-            }
-          }
-          if (!binId) {
-            const binsRes = await fetch(
-              `https://${projectId}.supabase.co/rest/v1/bins?select=id&limit=1`,
-              { method: "GET", headers },
-            );
-            if (binsRes.ok) {
-              const binsRows = await binsRes.json();
-              if (binsRows.length > 0) {
-                binId = String(binsRows[0].id);
-              }
-            }
-          }
-          if (!binId) {
-            throw new Error(
-              "No inventory bin available for realtime receipt.",
-            );
-          }
-
-          nextOnHand = 1;
-          const insertRes = await fetch(
-            `https://${projectId}.supabase.co/rest/v1/inventory_on_hand`,
-            {
-              method: "POST",
-              headers: {
-                ...headers,
-                Prefer: "return=minimal",
-              },
-              body: JSON.stringify({
-                product_id: insertProductKey,
-                bin_id: binId,
-                qty_on_hand: nextOnHand,
-              }),
-            },
-          );
-          if (!insertRes.ok) {
-            throw new Error(await insertRes.text());
-          }
-        }
-
-        await fetch(
-          `https://${projectId}.supabase.co/rest/v1/products?product_id=eq.${encodeURIComponent(matchedItem.id)}`,
-          {
-            method: "PATCH",
-            headers: { ...headers, Prefer: "return=minimal" },
-            body: JSON.stringify({
-              inventory_on_hand: nextOnHand,
-              available_stock: Math.max(
-                0,
-                nextOnHand - matchedItem.reservedStock,
-              ),
-              available_to_promise: Math.max(
-                0,
-                nextOnHand - matchedItem.reservedStock,
-              ),
-            }),
-          },
-        );
+        const syncedItem = await receiveInventoryScan({
+          product_id: matchedItem.id,
+          product_uuid: matchedItem.productUuid,
+          reserved_stock: matchedItem.reservedStock,
+          increment: 1,
+        });
+        const nextOnHand = Number(syncedItem.systemCount ?? 0);
 
         setInventory((prev) =>
           prev.map((entry) => {
@@ -585,7 +500,8 @@ export function WarehouseReceiving() {
             return {
               ...entry,
               systemCount: nextOnHand,
-              lastUpdated: new Date().toISOString(),
+              lastUpdated:
+                syncedItem.lastUpdated || new Date().toISOString(),
               status:
                 nextOnHand === 0
                   ? "zero"
@@ -684,8 +600,7 @@ export function WarehouseReceiving() {
     setIsScanListening(true);
     setScanInput("");
     toast.success("Scanner ready", {
-      description:
-        "Scan barcode now, then press Enter (or use hardware scanner Enter).",
+      description: "Enter Barcode/SKU in Scanner Input.",
     });
   };
 
@@ -820,7 +735,7 @@ export function WarehouseReceiving() {
     if (!grnCheckPhoto) return null;
 
     const filePath = `${grnId}/${Date.now()}-${grnCheckPhoto.name}`;
-    const { error: uploadError } = await supabase.storage
+    const { error: uploadError } = await supabaseQuality.storage
       .from("qc_evidence_photos")
       .upload(filePath, grnCheckPhoto, { upsert: true });
 
@@ -829,7 +744,7 @@ export function WarehouseReceiving() {
       return null;
     }
 
-    const { data } = supabase.storage
+    const { data } = supabaseQuality.storage
       .from("qc_evidence_photos")
       .getPublicUrl(filePath);
 
@@ -858,7 +773,7 @@ export function WarehouseReceiving() {
 
     const photoUrl = await uploadGrnCheckPhoto(savedGrnId);
 
-    const { error } = await supabase
+    const { error } = await supabaseQuality
       .from("grn_quality_checks")
       .insert({
         grn_id: savedGrnId,
@@ -872,6 +787,55 @@ export function WarehouseReceiving() {
 
     if (error) {
       toast.error("Failed to save checks", { description: error.message });
+      return;
+    }
+
+    try {
+      const firstLine = lines[0];
+      const firstProduct = inventory.find(
+        (item) => item.id === firstLine?.productId,
+      );
+      const qcRows = Object.entries(grnChecks)
+        .filter(([, value]) => value === "fail")
+        .map(([checkKey]) => {
+          const discrepancy = qcDiscrepancies[checkKey];
+          const reasonCode = discrepancy?.reason_code
+            ? toReasonCode(discrepancy.reason_code)
+            : toReasonCode(checkKey);
+          const severity = (discrepancy?.severity ||
+            "Major") as "Minor" | "Major" | "Critical";
+
+          return {
+            shipment_reference: savedGrnNumber,
+            product_sku: firstProduct?.sku || "QC-GRN",
+            product_name:
+              firstProduct?.name || "GRN Quality Check",
+            batch_number:
+              firstLine?.batchNumber?.trim() || "QC-CHECK",
+            system_count: Number(firstLine?.qtyExpected || 0),
+            physical_count: Number(firstLine?.qtyReceived || 0),
+            discrepancy_units: 0,
+            reason_code: reasonCode,
+            status: "pending" as const,
+            reported_by: "warehouse_operator",
+            review_notes: grnCheckNotes || null,
+            severity,
+            evidence_urls: photoUrl ? [photoUrl] : [],
+            supplier_name: supplierName.trim() || null,
+          };
+        });
+
+      await syncShipmentDiscrepancies(
+        savedGrnNumber || savedGrnId,
+        qcRows,
+      );
+    } catch (syncError) {
+      toast.error("QC saved but discrepancy sync failed", {
+        description:
+          syncError instanceof Error
+            ? syncError.message
+            : "Unknown discrepancy sync error",
+      });
       return;
     }
 
@@ -913,9 +877,15 @@ export function WarehouseReceiving() {
   ) => {
     setSavedGrnId(null);
     setSavedGrnNumber(null);
+    const nextValue =
+      field === "qtyExpected" || field === "qtyReceived"
+        ? sanitizeIntegerInput(value)
+        : value;
     setLines((prev) =>
       prev.map((l) =>
-        l.lineId === lineId ? { ...l, [field]: value } : l,
+        l.lineId === lineId
+          ? { ...l, [field]: nextValue }
+          : l,
       ),
     );
   };
@@ -1015,9 +985,6 @@ export function WarehouseReceiving() {
       received_date: receivedDate,
       notes: notes.trim() || null,
       status: "draft",
-      created_by: "warehouse_operator",
-      has_discrepancy: hasDiscrepancy,
-      review_status: hasDiscrepancy ? "pending" : null,
     };
 
     const linePayload = lines.map((line, idx) => {
@@ -1036,7 +1003,7 @@ export function WarehouseReceiving() {
         id: crypto.randomUUID(),
         grn_draft_id: grnId,
         line_no: idx + 1,
-        product_id: line.productId,
+        product_id: product?.productUuid ?? line.productId,
         product_name: product?.name ?? "Unknown",
         sku: product?.sku ?? "N/A",
         qty_expected: expected,
@@ -1051,39 +1018,102 @@ export function WarehouseReceiving() {
     return { grnId, grnNumber, headerPayload, linePayload };
   };
 
+  const syncShipmentDiscrepancies = useCallback(
+    async (
+      grnReference: string,
+      rows: Array<{
+        shipment_reference: string | null;
+        product_sku: string;
+        product_name: string;
+        batch_number: string;
+        system_count: number;
+        physical_count: number;
+        discrepancy_units: number;
+        reason_code: string;
+        status: "pending";
+        reported_by: string;
+        review_notes: string | null;
+        severity: "Minor" | "Major" | "Critical";
+        evidence_urls: string[];
+        supplier_name: string | null;
+      }>,
+    ) => {
+      if (!rows.length) return;
+
+      const { data: existingRows, error: existingError } =
+        await supabaseQuality
+          .from("shipment_discrepancies")
+          .select(
+            "grn_reference,product_sku,batch_number,reason_code",
+          )
+          .eq("grn_reference", grnReference);
+
+      if (existingError) {
+        throw new Error(existingError.message);
+      }
+
+      const existingKeys = new Set(
+        (existingRows || []).map(
+          (row: any) =>
+            [
+              row.grn_reference,
+              row.product_sku,
+              row.batch_number,
+              row.reason_code,
+            ].join("|"),
+        ),
+      );
+
+      const payload = rows
+        .filter((row) => {
+          const key = [
+            grnReference,
+            row.product_sku,
+            row.batch_number,
+            row.reason_code,
+          ].join("|");
+          return !existingKeys.has(key);
+        })
+        .map((row) => ({
+          id: crypto.randomUUID(),
+          grn_reference: grnReference,
+          shipment_reference: row.shipment_reference,
+          product_sku: row.product_sku,
+          product_name: row.product_name,
+          batch_number: row.batch_number,
+          system_count: row.system_count,
+          physical_count: row.physical_count,
+          discrepancy_units: row.discrepancy_units,
+          reason_code: row.reason_code,
+          status: row.status,
+          reported_by: row.reported_by,
+          reported_at: new Date().toISOString(),
+          review_notes: row.review_notes,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          severity: row.severity,
+          evidence_urls: row.evidence_urls,
+          supplier_name: row.supplier_name,
+        }));
+
+      if (!payload.length) return;
+
+      const { error } = await supabaseQuality
+        .from("shipment_discrepancies")
+        .insert(payload);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+    },
+    [supabaseQuality, supplierName],
+  );
+
   const saveToDatabase = async (
     headerPayload: object,
     linePayload: object[],
   ) => {
-    const hRes = await fetch(
-      `https://${projectId}.supabase.co/rest/v1/grn_drafts`,
-      {
-        method: "POST",
-        headers: {
-          apikey: publicAnonKey,
-          Authorization: `Bearer ${publicAnonKey}`,
-          "Content-Type": "application/json",
-          Prefer: "return=minimal",
-        },
-        body: JSON.stringify(headerPayload),
-      },
-    );
-    if (!hRes.ok) throw new Error(await hRes.text());
-
-    const lRes = await fetch(
-      `https://${projectId}.supabase.co/rest/v1/grn_draft_lines`,
-      {
-        method: "POST",
-        headers: {
-          apikey: publicAnonKey,
-          Authorization: `Bearer ${publicAnonKey}`,
-          "Content-Type": "application/json",
-          Prefer: "return=minimal",
-        },
-        body: JSON.stringify(linePayload),
-      },
-    );
-    if (!lRes.ok) throw new Error(await lRes.text());
+    await saveGrnDraft(headerPayload, linePayload);
   };
 
   const handleSaveGrn = async () => {
@@ -1130,6 +1160,59 @@ export function WarehouseReceiving() {
         "warehouse_operator",
       );
 
+      const lineDiscrepancyRows = lines
+        .map((line) => {
+          const product = inventory.find(
+            (item) => item.id === line.productId,
+          );
+          const systemCount = Number(line.qtyExpected);
+          const physicalCount = Number(line.qtyReceived);
+          const discrepancyUnits = Math.abs(
+            physicalCount - systemCount,
+          );
+
+          if (
+            !Number.isFinite(systemCount) ||
+            !Number.isFinite(physicalCount) ||
+            discrepancyUnits === 0
+          ) {
+            return null;
+          }
+
+          const reason = line.discrepancyReason === "other"
+            ? line.otherReason.trim()
+            : line.discrepancyReason;
+
+          return {
+            shipment_reference: grnNumber || grnId,
+            product_sku: product?.sku || "N/A",
+            product_name: product?.name || "Unknown",
+            batch_number: line.batchNumber.trim() || "N/A",
+            system_count: systemCount,
+            physical_count: physicalCount,
+            discrepancy_units: discrepancyUnits,
+            reason_code: toReasonCode(reason || "COUNT_MISMATCH"),
+            status: "pending" as const,
+            reported_by: "warehouse_operator",
+            review_notes: notes.trim() || null,
+            severity: deriveSeverity(discrepancyUnits),
+            evidence_urls: [],
+            supplier_name: supplierName.trim() || null,
+          };
+        })
+        .filter(
+          (
+            row,
+          ): row is NonNullable<typeof row> => Boolean(row),
+        );
+
+      if (lineDiscrepancyRows.length > 0) {
+        await syncShipmentDiscrepancies(
+          grnNumber || grnId,
+          lineDiscrepancyRows,
+        );
+      }
+
       setIsPosted(true);
       setSavedGrnId(grnId);
       setSavedGrnNumber(grnNumber);
@@ -1137,6 +1220,7 @@ export function WarehouseReceiving() {
       toast.success(`GRN ${grnNumber} posted!`, {
         description: `${result.lines_processed} line(s) - ${result.products_updated} product(s) updated`,
       });
+      notifyDashboardDataChanged("operations:grn-posted");
 
       await new Promise((r) => setTimeout(r, 600));
       await fetchInventory();
@@ -1173,23 +1257,52 @@ export function WarehouseReceiving() {
       return;
     }
 
+    const expectedItemsCount = Number.parseInt(
+      deliveryForm.expected_items_count,
+      10,
+    );
+    if (
+      !Number.isFinite(expectedItemsCount) ||
+      expectedItemsCount < 1
+    ) {
+      setDeliveryFormErrors((prev) => ({
+        ...prev,
+        expected_items_count:
+          "Expected items count must be 1 or more.",
+      }));
+      toast.error("Validation Error", {
+        description: "Expected items count must be 1 or more.",
+      });
+      return;
+    }
+
+    if (
+      deliveryForm.contact_phone &&
+      !isPhoneValid(deliveryForm.contact_phone)
+    ) {
+      setDeliveryFormErrors((prev) => ({
+        ...prev,
+        contact_phone:
+          "Phone number must be up to 10 digits.",
+      }));
+      toast.error("Validation Error", {
+        description: "Phone number must be up to 10 digits.",
+      });
+      return;
+    }
+
     setSchedulingDelivery(true);
     try {
-      const response = await supabase.functions.invoke("shipments", {
-        body: {
-          delivery_datetime: deliveryForm.delivery_datetime,
-          supplier_name: deliveryForm.supplier_name,
-          expected_items_count: parseInt(deliveryForm.expected_items_count),
-          warehouse_location: deliveryForm.warehouse_location,
-          contact_person_name: deliveryForm.contact_person_name || null,
-          contact_phone: deliveryForm.contact_phone || null,
-          notes: deliveryForm.notes || null,
-        },
+      await scheduleWarehouseDelivery({
+        delivery_datetime: deliveryForm.delivery_datetime,
+        supplier_name: deliveryForm.supplier_name,
+        expected_items_count: expectedItemsCount,
+        warehouse_location: deliveryForm.warehouse_location,
+        contact_person_name:
+          deliveryForm.contact_person_name || null,
+        contact_phone: deliveryForm.contact_phone || null,
+        notes: deliveryForm.notes || null,
       });
-
-      if (response.error) {
-        throw new Error(response.error.message);
-      }
 
       toast.success("Delivery scheduled successfully", {
         description: "The warehouse is now expecting this delivery.",
@@ -1204,6 +1317,10 @@ export function WarehouseReceiving() {
         contact_person_name: "",
         contact_phone: "",
         notes: "",
+      });
+      setDeliveryFormErrors({
+        expected_items_count: "",
+        contact_phone: "",
       });
       setShowDeliveryScheduleDialog(false);
     } catch (error) {
@@ -1322,7 +1439,7 @@ export function WarehouseReceiving() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Button
           onClick={handleScan}
           className="h-20 bg-[#00A3AD] hover:bg-[#0891B2] text-white flex flex-col gap-2 shadow-md"
@@ -1333,18 +1450,6 @@ export function WarehouseReceiving() {
           </span>
         </Button>
         <Button
-          onClick={() => {
-            setIsScanListening(false);
-            setScanInput("");
-            setShowCameraScanner(true);
-          }}
-          variant="outline"
-          className="h-20 border-[#0891B2] text-[#0891B2] hover:bg-[#0891B2]/10 flex flex-col gap-2"
-        >
-          <Camera className="w-8 h-8" />
-          <span className="font-semibold">Camera Scan</span>
-        </Button>
-        <Button
           onClick={handleViewGrn}
           variant="outline"
           className="h-20 border-[#00A3AD] text-[#00A3AD] hover:bg-[#00A3AD]/10 flex flex-col gap-2"
@@ -1353,52 +1458,6 @@ export function WarehouseReceiving() {
           <span className="font-semibold">View GRN</span>
         </Button>
       </div>
-      <Dialog
-        open={showCameraScanner}
-        onOpenChange={setShowCameraScanner}
-      >
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle className="text-[#111827]">
-              Mobile Camera Scanner
-            </DialogTitle>
-            <DialogDescription className="text-[#6B7280]">
-              Point camera to barcode. Successful scan
-              automatically increments Actual Received by 1.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="rounded-lg border border-[#111827]/10 bg-black overflow-hidden">
-              <video
-                ref={scanVideoRef}
-                className="w-full h-72 object-cover"
-                muted
-                playsInline
-              />
-            </div>
-            {cameraError ? (
-              <div className="text-sm text-[#B45309] bg-[#FFFBEB] border border-[#FDE68A] rounded-md px-3 py-2">
-                {cameraError}
-              </div>
-            ) : (
-              <div className="text-sm text-[#0F766E] bg-[#ECFEFF] border border-[#A5F3FC] rounded-md px-3 py-2">
-                {isCameraScanning
-                  ? "Scanner is active. Hold camera steady over barcode."
-                  : "Starting camera..."}
-              </div>
-            )}
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                onClick={() => setShowCameraScanner(false)}
-                className="border-[#111827]/20 text-[#111827]"
-              >
-                Close
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
       {isScanListening && (
         <Card className="bg-white border-[#00A3AD]/30 shadow-sm">
           <CardContent className="pt-4 space-y-2">
@@ -1432,7 +1491,7 @@ export function WarehouseReceiving() {
               </Button>
             </div>
             <p className="text-xs text-[#6B7280]">
-              Every valid scan increments matching line&apos;s Qty
+              Every valid scan increments matching line's Qty
               Received by 1.
             </p>
           </CardContent>
@@ -1464,26 +1523,80 @@ export function WarehouseReceiving() {
             </div>
 
             <div>
-              <Label className="text-[#6B7280]">Supplier Name *</Label>
-              <Input
+              <Label className="text-[#6B7280]">Supplier *</Label>
+              <Select
                 value={deliveryForm.supplier_name}
-                onChange={(e) => setDeliveryForm({ ...deliveryForm, supplier_name: e.target.value })}
-                placeholder="Enter supplier name"
-                className="mt-2 border-[#111827]/10"
-                disabled={schedulingDelivery}
-              />
+                onValueChange={(value) => {
+                  const supplier = suppliers.find(
+                    (row) => row.supplier_name === value,
+                  );
+                  setDeliveryForm({
+                    ...deliveryForm,
+                    supplier_name: value,
+                    contact_person_name:
+                      supplier?.contact_person ??
+                      deliveryForm.contact_person_name,
+                    contact_phone:
+                      supplier?.phone ?? deliveryForm.contact_phone,
+                  });
+                }}
+                disabled={schedulingDelivery || suppliers.length === 0}
+              >
+                <SelectTrigger className="mt-2 border-[#111827]/10">
+                  <SelectValue
+                    placeholder={
+                      suppliers.length === 0
+                        ? "No active suppliers found"
+                        : "Select supplier"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {suppliers.map((supplier) => (
+                    <SelectItem
+                      key={supplier.id}
+                      value={supplier.supplier_name}
+                    >
+                      {supplier.supplier_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div>
               <Label className="text-[#6B7280]">Expected Items Count *</Label>
               <Input
                 type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 value={deliveryForm.expected_items_count}
-                onChange={(e) => setDeliveryForm({ ...deliveryForm, expected_items_count: e.target.value })}
+                onChange={(e) => {
+                  setDeliveryForm({
+                    ...deliveryForm,
+                    expected_items_count: sanitizeIntegerInput(
+                      e.target.value,
+                    ),
+                  });
+                  setDeliveryFormErrors((prev) => ({
+                    ...prev,
+                    expected_items_count: "",
+                  }));
+                }}
+                onKeyDown={(e) =>
+                  blockInvalidNumberKeys(e)
+                }
                 placeholder="Enter expected number of items"
                 className="mt-2 border-[#111827]/10"
                 disabled={schedulingDelivery}
               />
+              {deliveryFormErrors.expected_items_count && (
+                <p className="mt-2 text-xs text-[#DC2626]">
+                  {deliveryFormErrors.expected_items_count}
+                </p>
+              )}
             </div>
 
             <div>
@@ -1491,16 +1604,23 @@ export function WarehouseReceiving() {
               <Select
                 value={deliveryForm.warehouse_location}
                 onValueChange={(value) => setDeliveryForm({ ...deliveryForm, warehouse_location: value })}
-                disabled={schedulingDelivery}
+                disabled={schedulingDelivery || warehouseLocations.length === 0}
               >
                 <SelectTrigger className="mt-2 border-[#111827]/10">
-                  <SelectValue placeholder="Select warehouse location" />
+                  <SelectValue
+                    placeholder={
+                      warehouseLocations.length === 0
+                        ? "No Product Master locations found"
+                        : "Select warehouse location"
+                    }
+                  />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Zone A-01">Zone A-01</SelectItem>
-                  <SelectItem value="Zone B-02">Zone B-02</SelectItem>
-                  <SelectItem value="Zone C-03">Zone C-03</SelectItem>
-                  <SelectItem value="Zone D-04">Zone D-04</SelectItem>
+                  {warehouseLocations.map((location) => (
+                    <SelectItem key={location} value={location}>
+                      {location}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -1520,11 +1640,29 @@ export function WarehouseReceiving() {
               <Label className="text-[#6B7280]">Contact Phone</Label>
               <Input
                 value={deliveryForm.contact_phone}
-                onChange={(e) => setDeliveryForm({ ...deliveryForm, contact_phone: e.target.value })}
+                onChange={(e) => {
+                  setDeliveryForm({
+                    ...deliveryForm,
+                    contact_phone: sanitizePhoneInput(
+                      e.target.value,
+                    ),
+                  });
+                  setDeliveryFormErrors((prev) => ({
+                    ...prev,
+                    contact_phone: "",
+                  }));
+                }}
+                inputMode="numeric"
+                maxLength={10}
                 placeholder="Enter contact phone number"
                 className="mt-2 border-[#111827]/10"
                 disabled={schedulingDelivery}
               />
+              {deliveryFormErrors.contact_phone && (
+                <p className="mt-2 text-xs text-[#DC2626]">
+                  {deliveryFormErrors.contact_phone}
+                </p>
+              )}
             </div>
 
             <div>
@@ -1560,13 +1698,21 @@ export function WarehouseReceiving() {
       </Dialog>
 
       {showGrnForm && (
-        <>
+        <Accordion
+          type="multiple"
+          defaultValue={["grn-header", "pharma-checks", "line-items"]}
+          className="space-y-4"
+        >
+          <AccordionItem value="grn-header" className="border-0">
           <Card className="bg-white border-[#111827]/10 shadow-lg">
             <CardHeader>
-              <CardTitle className="text-[#111827] font-semibold">
-                GRN Header
-              </CardTitle>
+              <AccordionTrigger className="py-0 hover:no-underline">
+                <CardTitle className="text-[#111827] font-semibold">
+                  GRN Header
+                </CardTitle>
+              </AccordionTrigger>
             </CardHeader>
+            <AccordionContent className="pb-0">
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label className="text-[#6B7280]">Received Date</Label>
@@ -1580,14 +1726,41 @@ export function WarehouseReceiving() {
               </div>
 
               <div>
-                <Label className="text-[#6B7280]">Supplier Name</Label>
-                <Input
+                <Label className="text-[#6B7280]">Supplier</Label>
+                <Select
                   value={supplierName}
-                  onChange={(e) => setSupplierName(e.target.value)}
-                  placeholder="Enter supplier name"
-                  className="mt-2 border-[#111827]/10"
-                  disabled={isPosted}
-                />
+                  onValueChange={(value) => {
+                    const supplier = suppliers.find(
+                      (row) => row.supplier_name === value,
+                    );
+                    setSupplierName(value);
+                    setSupplierContact(
+                      supplier?.phone || supplier?.email || "",
+                    );
+                    setSupplierAddress(supplier?.address || "");
+                  }}
+                  disabled={isPosted || suppliers.length === 0}
+                >
+                  <SelectTrigger className="mt-2 border-[#111827]/10">
+                    <SelectValue
+                      placeholder={
+                        suppliers.length === 0
+                          ? "No active suppliers found"
+                          : "Select supplier"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {suppliers.map((supplier) => (
+                      <SelectItem
+                        key={supplier.id}
+                        value={supplier.supplier_name}
+                      >
+                        {supplier.supplier_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div>
@@ -1623,18 +1796,24 @@ export function WarehouseReceiving() {
                 />
               </div>
             </CardContent>
+            </AccordionContent>
           </Card>
+          </AccordionItem>
 
           {/* Pharma Checks Section */}
+          <AccordionItem value="pharma-checks" className="border-0">
           <Card className="bg-white border-[#111827]/10 shadow-lg">
             <CardHeader>
-              <CardTitle className="text-[#111827] font-semibold">
-                Pharma Checks
-              </CardTitle>
+              <AccordionTrigger className="py-0 hover:no-underline">
+                <CardTitle className="text-[#111827] font-semibold">
+                  Pharma Checks
+                </CardTitle>
+              </AccordionTrigger>
               <p className="text-sm text-[#6B7280]">
                 Complete the checklist and upload proof if needed.
               </p>
             </CardHeader>
+            <AccordionContent className="pb-0">
             <CardContent>
               <div className="rounded-lg border border-[#E5E7EB] p-4 bg-[#F8FAFC] space-y-4">
                 {[
@@ -1650,19 +1829,49 @@ export function WarehouseReceiving() {
                       onValueChange={(val) =>
                         setGrnChecks((prev) => ({ ...prev, [check.key]: val }))
                       }
-                      className="flex gap-6"
+                      className="grid grid-cols-1 gap-3 sm:grid-cols-3"
                     >
-                      <div className="flex items-center gap-2">
-                        <RadioGroupItem value="pass" id={`${check.key}-pass`} />
-                        <Label htmlFor={`${check.key}-pass`} className="cursor-pointer font-normal">Pass</Label>
+                      <div className={`rounded-lg border px-3 py-3 transition-colors ${
+                        grnChecks[check.key] === "pass"
+                          ? "border-[#00A3AD] bg-[#ECFEFF] shadow-sm"
+                          : "border-[#CBD5E1] bg-white hover:border-[#00A3AD]/50"
+                      }`}>
+                        <Label htmlFor={`${check.key}-pass`} className="flex cursor-pointer items-center gap-3 font-medium text-[#111827]">
+                          <RadioGroupItem
+                            value="pass"
+                            id={`${check.key}-pass`}
+                            className="size-5 border-[#64748B] text-[#00A3AD]"
+                          />
+                          <span>Pass</span>
+                        </Label>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <RadioGroupItem value="fail" id={`${check.key}-fail`} />
-                        <Label htmlFor={`${check.key}-fail`} className="cursor-pointer font-normal">Fail</Label>
+                      <div className={`rounded-lg border px-3 py-3 transition-colors ${
+                        grnChecks[check.key] === "fail"
+                          ? "border-[#DC2626] bg-[#FEF2F2] shadow-sm"
+                          : "border-[#CBD5E1] bg-white hover:border-[#DC2626]/50"
+                      }`}>
+                        <Label htmlFor={`${check.key}-fail`} className="flex cursor-pointer items-center gap-3 font-medium text-[#111827]">
+                          <RadioGroupItem
+                            value="fail"
+                            id={`${check.key}-fail`}
+                            className="size-5 border-[#64748B] text-[#DC2626]"
+                          />
+                          <span>Fail</span>
+                        </Label>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <RadioGroupItem value="na" id={`${check.key}-na`} />
-                        <Label htmlFor={`${check.key}-na`} className="cursor-pointer font-normal">N/A</Label>
+                      <div className={`rounded-lg border px-3 py-3 transition-colors ${
+                        grnChecks[check.key] === "na"
+                          ? "border-[#475569] bg-[#F8FAFC] shadow-sm"
+                          : "border-[#CBD5E1] bg-white hover:border-[#475569]/50"
+                      }`}>
+                        <Label htmlFor={`${check.key}-na`} className="flex cursor-pointer items-center gap-3 font-medium text-[#111827]">
+                          <RadioGroupItem
+                            value="na"
+                            id={`${check.key}-na`}
+                            className="size-5 border-[#64748B] text-[#475569]"
+                          />
+                          <span>N/A</span>
+                        </Label>
                       </div>
                     </RadioGroup>
 
@@ -1765,14 +1974,20 @@ export function WarehouseReceiving() {
                 </div>
               </div>
             </CardContent>
+            </AccordionContent>
           </Card>
+          </AccordionItem>
 
+          <AccordionItem value="line-items" className="border-0">
           <Card className="bg-white border-[#111827]/10 shadow-lg">
             <CardHeader>
-              <CardTitle className="text-[#111827] font-semibold">
-                Line Items
-              </CardTitle>
+              <AccordionTrigger className="py-0 hover:no-underline">
+                <CardTitle className="text-[#111827] font-semibold">
+                  Line Items
+                </CardTitle>
+              </AccordionTrigger>
             </CardHeader>
+            <AccordionContent className="pb-0">
             <CardContent className="space-y-4">
               {lines.map((line, index) => {
                 const expected = Number(line.qtyExpected);
@@ -1820,9 +2035,13 @@ export function WarehouseReceiving() {
                         <Label className="text-[#6B7280]">
                           Product
                         </Label>
-                        <Select
+                        <SearchableProductSelect
+                          options={inventory.map((item) => ({
+                            sku: item.id,
+                            name: `${item.name} (${item.sku})`,
+                          }))}
                           value={line.productId}
-                          onValueChange={(v) =>
+                          onChange={(v) =>
                             updateLine(
                               line.lineId,
                               "productId",
@@ -1830,27 +2049,9 @@ export function WarehouseReceiving() {
                             )
                           }
                           disabled={isPosted}
-                        >
-                          <SelectTrigger className="mt-2 border-[#111827]/10 bg-white">
-                            <SelectValue placeholder="Select product" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {inventory.length === 0 ? (
-                              <div className="px-3 py-2 text-sm text-[#6B7280]">
-                                No products loaded yet.
-                              </div>
-                            ) : (
-                              inventory.map((item) => (
-                                <SelectItem
-                                  key={item.id}
-                                  value={item.id}
-                                >
-                                  {item.name} ({item.sku})
-                                </SelectItem>
-                              ))
-                            )}
-                          </SelectContent>
-                        </Select>
+                          placeholder="Type or select product..."
+                          className="mt-2"
+                        />
                       </div>
                       <div>
                         <Label className="text-[#6B7280]">
@@ -1859,6 +2060,9 @@ export function WarehouseReceiving() {
                         <Input
                           type="number"
                           min="0"
+                          step="1"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
                           value={line.qtyExpected}
                           onChange={(e) =>
                             updateLine(
@@ -1866,6 +2070,9 @@ export function WarehouseReceiving() {
                               "qtyExpected",
                               e.target.value,
                             )
+                          }
+                          onKeyDown={(e) =>
+                            blockInvalidNumberKeys(e)
                           }
                           className="mt-2 border-[#111827]/10 bg-white"
                           placeholder="0"
@@ -1879,6 +2086,9 @@ export function WarehouseReceiving() {
                         <Input
                           type="number"
                           min="1"
+                          step="1"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
                           value={line.qtyReceived}
                           onChange={(e) =>
                             updateLine(
@@ -1886,6 +2096,9 @@ export function WarehouseReceiving() {
                               "qtyReceived",
                               e.target.value,
                             )
+                          }
+                          onKeyDown={(e) =>
+                            blockInvalidNumberKeys(e)
                           }
                           className="mt-2 border-[#111827]/10 bg-white"
                           placeholder="0"
@@ -2003,8 +2216,10 @@ export function WarehouseReceiving() {
                 Add Line Item
               </Button>
             </CardContent>
+            </AccordionContent>
           </Card>
-        </>
+          </AccordionItem>
+        </Accordion>
       )}
 
       <Card className="bg-white border-[#111827]/10 shadow-sm">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { supabase } from "../lib/supabase";
+import { supabase, supabaseFulfillment, supabaseSCM } from "../lib/supabase";
 
 type Direction = "ALL" | "IN" | "OUT";
 
@@ -48,7 +48,9 @@ const TYPE_COLORS: Record<string, string> = {
   "Manual Adjustment": "#D97706",
   RESERVATION_EXPIRED: "#DC2626",
   ADJUSTMENT: "#EA580C",
+  STOCK_ADJUSTMENT: "#EA580C",
   DISPATCH: "#BE185D",
+  "STOCK TRANSFER": "#00A3AD",
 };
 
 export default function MovementReport() {
@@ -65,7 +67,7 @@ export default function MovementReport() {
 
   // Load SKU list for dropdown
   useEffect(() => {
-    supabase
+    supabaseSCM
       .from("products")
       .select("sku")
       .order("sku")
@@ -81,7 +83,7 @@ export default function MovementReport() {
   // Load product metadata used by category/location filters
   useEffect(() => {
     const fetchMetaRows = async () => {
-      const { data: products, error: productsError } = await supabase
+      const { data: products, error: productsError } = await supabaseSCM
         .from("products")
         .select("product_id,sku,category,warehouse_location");
 
@@ -108,7 +110,7 @@ export default function MovementReport() {
   const fetchMovements = useCallback(async () => {
     setLoading(true);
 
-    let query = supabase
+    let query = supabaseFulfillment
       .from("movement_report")
       .select("*")
       .order("created_at", { ascending: false })

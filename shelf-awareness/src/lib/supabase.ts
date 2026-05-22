@@ -1,2 +1,8 @@
-// Re-export the shared Supabase client to avoid multiple instances
-export { supabase } from "../utils/supabase/client";
+// Re-export the shared Supabase clients to avoid multiple instances
+export {
+  supabase,
+  supabaseSCM,
+  supabaseFulfillment,
+  supabaseQuality,
+  supabaseSupportIntel,
+} from "../utils/supabase/client";
