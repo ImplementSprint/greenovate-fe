@@ -2,7 +2,7 @@
 
 import React, { useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User, Package, MapPin, LogOut, ChevronRight, Clock, CheckCircle2, X, Settings, Lock, Camera, ArrowLeft, Trash2 } from 'lucide-react';
+import { User, Package, MapPin, LogOut, ChevronRight, ChevronDown, Clock, CheckCircle2, X, Settings, Lock, Camera, ArrowLeft, Trash2, RotateCcw } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import {
   ensureAccessToken,
@@ -12,6 +12,11 @@ import { buildApiUrl } from '@/lib/api';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { usePhilippineLocations } from '@/hooks/usePhilippineLocations';
 import { normalizeDateForInput, normalizeDateForStorage } from '@/lib/date';
+import {
+  getDisplayOrderNumber,
+  getOrderStatusBadgeClassName,
+  getOrderStatusDotClassName,
+} from '@/lib/order-ui';
 import { normalizePhilippinePhone, PH_PHONE_MESSAGE } from '@/lib/phone';
 
 const ADDRESS_STORAGE_PREFIX = '__addresses_json__:';
@@ -136,34 +141,10 @@ const parseAddresses = (
 const stringifyAddresses = (addresses: SavedAddress[]) =>
   `${ADDRESS_STORAGE_PREFIX}${JSON.stringify(addresses)}`;
 
-const getDisplayOrderNumber = (order: { orderNumber?: string; txNo?: string; id: string; date: string }) =>
-  order.id || order.orderNumber || (order.txNo ? `TXN-${order.txNo}` : `TXN-${new Date(order.date).getTime()}`);
-
-const getOrderStatusBadgeClassName = (status: string) => {
-  if (status === 'Delivered' || status === 'Processing') {
-    return 'bg-blue-100 text-blue-700';
-  }
-
-  return 'bg-amber-100 text-amber-700';
-};
-
-const getOrderStatusDotClassName = (status: string) => {
-  if (status === 'Delivered' || status === 'Processing') {
-    return 'bg-blue-500';
-  }
-
-  return 'bg-amber-500';
-};
-
 const getAccountSubViewTitle = (accountSubView: string) => {
-  if (accountSubView === 'profile') {
-    return 'Profile Details';
-  }
-
-  if (accountSubView === 'orders') {
-    return 'Order History';
-  }
-
+  if (accountSubView === 'profile') return 'Profile Details';
+  if (accountSubView === 'orders') return 'Order History';
+  if (accountSubView === 'returns') return 'Refund Requests';
   return 'Account Settings';
 };
 
@@ -283,7 +264,7 @@ function AddressBookSection({
           const isDefault = index === 0;
 
           return (
-            <div key={getAddressKey(address)} className="p-6 sm:p-8">
+            <div key={`${getAddressKey(address)}-${index}`} className="p-6 sm:p-8">
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex-1 min-w-0">
                   <h4 className="text-2xl font-black text-slate-900 mb-3">Address</h4>
@@ -410,7 +391,7 @@ function AddressBookSection({
                           placeholder="Select province"
                           className="w-full bg-transparent text-base font-semibold text-slate-800 outline-none placeholder:font-medium placeholder:text-slate-300 sm:text-lg"
                         />
-                        <span className={`text-slate-400 text-xl transition-transform ${isProvincePickerOpen ? 'rotate-180' : ''}`}>â–¾</span>
+                        <ChevronDown className={`h-5 w-5 shrink-0 text-slate-400 transition-transform ${isProvincePickerOpen ? 'rotate-180' : ''}`} />
                       </button>
                     </div>
 
@@ -445,7 +426,7 @@ function AddressBookSection({
                           placeholder="Select city"
                           className="w-full bg-transparent text-base font-semibold text-slate-800 outline-none placeholder:font-medium placeholder:text-slate-300 sm:text-lg"
                         />
-                        <span className={`text-slate-400 text-xl transition-transform ${isCityPickerOpen ? 'rotate-180' : ''}`}>â–¾</span>
+                        <ChevronDown className={`h-5 w-5 shrink-0 text-slate-400 transition-transform ${isCityPickerOpen ? 'rotate-180' : ''}`} />
                       </button>
                     </div>
 
@@ -616,6 +597,11 @@ export default function Account() {
   const [makeAddressDefault, setMakeAddressDefault] = useState(false);
   const [addressValidationMessage, setAddressValidationMessage] = useState('');
   const [saveStatus, setSaveStatus] = useState<StatusMessage>({ type: null, message: '' });
+  const [returnRequests, setReturnRequests] = useState<{
+    id: string; receipt_number: string; reason: string; description?: string;
+    items: { name: string; quantity: number }[]; status: string; created_at: string;
+  }[]>([]);
+  const [isLoadingReturns, setIsLoadingReturns] = useState(false);
   const [addressEntries, setAddressEntries] = useState<SavedAddress[]>(parseAddresses(user?.address, user));
   const [addressFormData, setAddressFormData] = useState<SavedAddress>(createEmptyAddress(user));
   const profileImageInputRef = useRef<HTMLInputElement | null>(null);
@@ -636,6 +622,16 @@ export default function Account() {
     provincesStatus,
     citiesStatus,
   } = usePhilippineLocations(addressFormData.province, addressFormData.city);
+
+  React.useEffect(() => {
+    if (accountSubView !== 'returns') return;
+    setIsLoadingReturns(true);
+    fetchWithAuth('/api/orders/my-return-requests')
+      .then((res) => res.ok ? res.json() : { data: [] })
+      .then((payload) => setReturnRequests(payload?.data ?? []))
+      .catch(() => {})
+      .finally(() => setIsLoadingReturns(false));
+  }, [accountSubView]);
 
   React.useEffect(() => {
     if (user) {
@@ -1201,6 +1197,11 @@ export default function Account() {
     />
   );
 
+  const ORDERS_PER_PAGE = 5;
+  const [ordersPage, setOrdersPage] = useState(1);
+  const totalOrderPages = Math.ceil(orders.length / ORDERS_PER_PAGE);
+  const pagedOrders = orders.slice((ordersPage - 1) * ORDERS_PER_PAGE, ordersPage * ORDERS_PER_PAGE);
+
   const renderOrderHistory = () => (
     <div className="space-y-6">
       {orders.length === 0 ? (
@@ -1210,7 +1211,7 @@ export default function Account() {
           </div>
           <h3 className="text-xl font-black text-slate-900 mb-2">No orders yet</h3>
           <p className="text-slate-500 mb-8 max-w-xs mx-auto">You haven&apos;t placed any orders yet. Start shopping to see your history!</p>
-          <button 
+          <button
             onClick={() => setView('shop')}
             className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
           >
@@ -1218,51 +1219,155 @@ export default function Account() {
           </button>
         </div>
       ) : (
-        <div className="space-y-6">
-          {orders.map(order => (
-            <button
-              type="button"
-              key={order.id}
-              onClick={() => {
-                setSelectedOrder(order);
-                setView('order-status');
-              }}
-              className="group p-6 rounded-[2rem] border-2 border-slate-100 hover:border-blue-200 hover:bg-slate-50 transition-all cursor-pointer"
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Order ID</p>
-                  <p className="font-black text-slate-900 tracking-tight">{getDisplayOrderNumber(order)}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className={`px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-2 ${getOrderStatusBadgeClassName(order.status)}`}>
-                    <span className={`w-2 h-2 rounded-full ${getOrderStatusDotClassName(order.status)}`} />
-                    {order.status}
+        <>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-500 font-medium">{orders.length} order{orders.length === 1 ? '' : 's'} total</p>
+            {totalOrderPages > 1 && (
+              <p className="text-sm font-bold text-slate-500">Page {ordersPage} of {totalOrderPages}</p>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            {pagedOrders.map(order => (
+              <button
+                type="button"
+                key={order.id}
+                onClick={() => {
+                  setSelectedOrder(order);
+                  setView('order-status');
+                }}
+                className="w-full group p-6 rounded-[2rem] border-2 border-slate-100 hover:border-blue-200 hover:bg-slate-50 transition-all cursor-pointer text-left"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                  <div>
+                    <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Receipt No.</p>
+                    <p className="font-black text-slate-900 tracking-tight">{getDisplayOrderNumber(order)}</p>
                   </div>
-                  <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-blue-500 group-hover:translate-x-1 transition-all" />
+                  <div className="flex items-center gap-3">
+                    <div className={`px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-2 ${getOrderStatusBadgeClassName(order.status)}`}>
+                      <span className={`w-2 h-2 rounded-full ${getOrderStatusDotClassName(order.status)}`} />
+                      {order.status}
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-slate-300 group-hover:text-blue-500 group-hover:translate-x-1 transition-all" />
+                  </div>
                 </div>
-              </div>
-              
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-6 pt-6 border-t border-slate-100">
-                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Date</p>
-                  <p className="text-sm font-bold text-slate-900">{new Date(order.date).toLocaleDateString()}</p>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-6 pt-6 border-t border-slate-100">
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Date</p>
+                    <p className="text-sm font-bold text-slate-900">{new Date(order.date).toLocaleDateString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Total Amount</p>
+                    <p className="text-sm font-black text-slate-900">₱{order.total.toFixed(2)}</p>
+                  </div>
+                  <div className="hidden sm:block">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Items</p>
+                    <p className="text-sm font-bold text-slate-900">{order.items.length} {order.items.length === 1 ? 'Product' : 'Products'}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Total Amount</p>
-                  <p className="text-sm font-black text-slate-900">₱{order.total.toFixed(2)}</p>
-                </div>
-                <div className="hidden sm:block">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Items</p>
-                  <p className="text-sm font-bold text-slate-900">{order.items.length} Product{order.items.length > 1 ? 's' : ''}</p>
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
+              </button>
+            ))}
+          </div>
+
+          {totalOrderPages > 1 && (
+            <div className="flex items-center justify-center gap-2 pt-4">
+              <button
+                onClick={() => setOrdersPage((p) => Math.max(1, p - 1))}
+                disabled={ordersPage === 1}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Previous
+              </button>
+              {Array.from({ length: totalOrderPages }, (_, i) => i + 1).map((page) => (
+                <button
+                  key={page}
+                  onClick={() => setOrdersPage(page)}
+                  className={`w-10 h-10 rounded-xl text-sm font-bold transition-all ${
+                    ordersPage === page
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-100'
+                      : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {page}
+                </button>
+              ))}
+              <button
+                onClick={() => setOrdersPage((p) => Math.min(totalOrderPages, p + 1))}
+                disabled={ordersPage === totalOrderPages}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
+
+  const renderReturnRequests = () => {
+    const getStatusStyle = (status: string) => {
+      if (status === 'approved' || status === 'completed') return 'bg-green-100 text-green-700';
+      if (status === 'rejected') return 'bg-red-100 text-red-700';
+      if (status === 'reviewing') return 'bg-blue-100 text-blue-700';
+      return 'bg-amber-100 text-amber-700';
+    };
+
+    if (isLoadingReturns) return (
+      <div className="text-center py-12 text-slate-400 font-medium">Loading refund requests...</div>
+    );
+
+    if (returnRequests.length === 0) return (
+      <div className="text-center py-12">
+        <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <RotateCcw className="w-7 h-7 text-slate-400" />
+        </div>
+        <p className="font-bold text-slate-700 mb-1">No refund requests yet</p>
+        <p className="text-sm text-slate-500">Requests for delivered orders appear here.</p>
+      </div>
+    );
+
+    return (
+      <div className="space-y-4">
+        {returnRequests.map((req) => (
+          <div key={req.id} className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <p className="text-xs text-slate-500 font-medium mb-0.5">Receipt No.</p>
+                <p className="font-black text-slate-900 text-sm">{req.receipt_number}</p>
+              </div>
+              <span className={`px-3 py-1 rounded-full text-xs font-black shrink-0 ${getStatusStyle(req.status)}`}>
+                {req.status.charAt(0).toUpperCase() + req.status.slice(1)}
+              </span>
+            </div>
+            <div className="space-y-1.5 text-sm">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Reason</span>
+                <span className="font-medium text-slate-700 text-right max-w-[60%]">{req.reason}</span>
+              </div>
+              {req.description && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Details</span>
+                  <span className="font-medium text-slate-700 text-right max-w-[60%]">{req.description}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-500">Items</span>
+                <span className="font-medium text-slate-700 text-right max-w-[60%]">
+                  {req.items.map((i: { name: string; quantity: number }) => `${i.name} (×${i.quantity})`).join(', ')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Submitted</span>
+                <span className="font-medium text-slate-700">{new Date(req.created_at).toLocaleDateString('en-PH')}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   const renderAccountSettings = () => (
     <div className="space-y-10">
@@ -1277,18 +1382,6 @@ export default function Account() {
             className={`w-12 h-6 rounded-full transition-all relative ${settings.emailNotifications ? 'bg-blue-600' : 'bg-slate-200'}`}
           >
             <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${settings.emailNotifications ? 'left-7' : 'left-1'}`} />
-          </button>
-        </div>
-        <div className="flex items-center justify-between p-4 rounded-2xl hover:bg-slate-50 transition-colors">
-          <div>
-            <h4 className="font-black text-slate-900">SMS Notifications</h4>
-            <p className="text-sm text-slate-500">Receive delivery updates via SMS</p>
-          </div>
-          <button 
-            onClick={() => setSettings({...settings, smsNotifications: !settings.smsNotifications})}
-            className={`w-12 h-6 rounded-full transition-all relative ${settings.smsNotifications ? 'bg-blue-600' : 'bg-slate-200'}`}
-          >
-            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${settings.smsNotifications ? 'left-7' : 'left-1'}`} />
           </button>
         </div>
       </div>
@@ -1350,11 +1443,12 @@ export default function Account() {
                   { id: 'profile', name: 'Profile Details', icon: <User className="w-5 h-5" /> },
                   { id: 'addresses', name: 'Addresses', icon: <MapPin className="w-5 h-5" /> },
                   { id: 'orders', name: 'Order History', icon: <Package className="w-5 h-5" /> },
+                  { id: 'returns', name: 'Refund Requests', icon: <RotateCcw className="w-5 h-5" /> },
                   { id: 'settings', name: 'Account Settings', icon: <Settings className="w-5 h-5" /> }
                 ].map(item => (
-                  <button 
+                  <button
                     key={item.id}
-                    onClick={() => setAccountSubView(item.id as 'profile' | 'addresses' | 'orders' | 'settings')}
+                    onClick={() => setAccountSubView(item.id as 'profile' | 'addresses' | 'orders' | 'returns' | 'settings')}
                     className={`w-full flex items-center justify-between p-4 rounded-2xl font-bold text-sm transition-all group ${
                       accountSubView === item.id 
                         ? 'bg-blue-50 text-blue-600 border-l-4 border-blue-600 rounded-l-none' 
@@ -1399,6 +1493,7 @@ export default function Account() {
               {accountSubView === 'profile' && renderProfileDetails()}
               {accountSubView === 'addresses' && renderAddresses()}
               {accountSubView === 'orders' && renderOrderHistory()}
+              {accountSubView === 'returns' && renderReturnRequests()}
               {accountSubView === 'settings' && renderAccountSettings()}
             </motion.div>
           </div>

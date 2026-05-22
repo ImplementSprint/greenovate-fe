@@ -1,5 +1,6 @@
 export interface Order {
   id: string;
+  receiptNumber?: string;
   orderNumber?: string;
   txNo?: string;
   date: string;
@@ -9,7 +10,7 @@ export interface Order {
   discountAmount?: number;
   promoCode?: string;
   total: number;
-  status: 'Processing' | 'In Transit' | 'Delivered';
+  status: 'Processing' | 'In Transit' | 'Delivered' | 'Cancelled';
   shippingAddress: string;
   paymentMethod: string;
 }
@@ -24,6 +25,7 @@ export interface Product {
   images?: string[];
   specifications?: Record<string, string>;
   stock?: number;
+  sold?: number;
 }
 
 export interface CartItem extends Product {
@@ -35,6 +37,8 @@ export interface Branch {
   name: string;
   address: string;
   phone: string;
+  latitude?: number;
+  longitude?: number;
   opening_time: string;
   closing_time: string;
   is_active: boolean;

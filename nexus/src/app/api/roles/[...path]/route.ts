@@ -4,11 +4,11 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 
-const SERVICE_URL = process.env.ROLE_SERVICE_URL || 'http://localhost:4005';
+const SERVICE_URL = process.env.POS_FRONTEND_ROLE_SERVICE_URL || 'http://localhost:3036';
 
 async function proxyRequest(req: NextRequest, path: string) {
   try {
-    const url = `${SERVICE_URL}/${path}`;
+    const url = `${SERVICE_URL}/${path}${req.nextUrl.search}`;
     const init: RequestInit = {
       method: req.method,
       headers: { 
@@ -38,15 +38,19 @@ async function proxyRequest(req: NextRequest, path: string) {
   }
 }
 
-export async function GET(req: NextRequest, { params }: { params: { path: string[] } }) {
-  return proxyRequest(req, params.path.join('/'));
+export async function GET(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params;
+  return proxyRequest(req, path.join('/'));
 }
-export async function POST(req: NextRequest, { params }: { params: { path: string[] } }) {
-  return proxyRequest(req, params.path.join('/'));
+export async function POST(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params;
+  return proxyRequest(req, path.join('/'));
 }
-export async function PUT(req: NextRequest, { params }: { params: { path: string[] } }) {
-  return proxyRequest(req, params.path.join('/'));
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params;
+  return proxyRequest(req, path.join('/'));
 }
-export async function DELETE(req: NextRequest, { params }: { params: { path: string[] } }) {
-  return proxyRequest(req, params.path.join('/'));
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params;
+  return proxyRequest(req, path.join('/'));
 }

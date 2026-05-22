@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { AppProvider } from "../context/AppContext";
@@ -16,8 +16,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${inter.variable} font-sans bg-white text-slate-900 antialiased`}>
+    <html lang="en" suppressHydrationWarning>
+      <body suppressHydrationWarning className={`${inter.variable} font-sans bg-white text-slate-900 antialiased`}>
         <AppProvider>
           {children}
         </AppProvider>
@@ -25,3 +25,4 @@ export default function RootLayout({
     </html>
   );
 }
+

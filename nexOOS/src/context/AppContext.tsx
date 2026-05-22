@@ -1,99 +1,28 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef, useCallback, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Product, Branch, BranchInventory, Order, CartItem, User } from '../types';
-import {
-  clearAccessToken,
-  fetchWithAuth,
-  getAccessToken,
-} from '@/lib/auth-client';
-import { buildApiUrl } from '@/lib/api';
-
-type AccountSubView = 'profile' | 'addresses' | 'orders' | 'settings';
-
-interface AppContextType {
-  view: string;
-  setView: (view: string) => void;
-  accountSubView: AccountSubView;
-  setAccountSubView: React.Dispatch<React.SetStateAction<AccountSubView>>;
-  isLoggedIn: boolean;
-  setLoggedIn: () => void;
-  logout: () => void;
-  user: User | null;
-  setUser: (user: User | null) => void;
-  fetchUserProfile: () => Promise<void>;
-  cart: CartItem[];
-  setCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
-  selectedBranch: Branch | null;
-  setSelectedBranch: (branch: Branch | null) => void;
-  branches: Branch[];
-  branchInventory: BranchInventory[];
-  isBranchModalOpen: boolean;
-  setIsBranchModalOpen: (isOpen: boolean) => void;
-  isCartOpen: boolean;
-  setIsCartOpen: (isOpen: boolean) => void;
-  selectedProduct: Product | null;
-  setSelectedProduct: (product: Product | null) => void;
-  orders: Order[];
-  setOrders: React.Dispatch<React.SetStateAction<Order[]>>;
-  selectedOrder: Order | null;
-  setSelectedOrder: (order: Order | null) => void;
-  addToCart: (product: Product, options?: { openCart?: boolean }) => void;
-  updateQuantity: (id: string, delta: number) => void;
-  cartTotal: number;
-  isBranchOpen: (branch: Branch) => boolean;
-  searchQuery: string;
-  setSearchQuery: (query: string) => void;
-}
+import { clearAccessToken, fetchWithAuth, fetchWithAuthRetry, getAccessToken } from '@/lib/auth-client';
+import { buildApiUrl, fetchJsonWithRetry } from '@/lib/api';
+import { areCartItemsEqual, cartSnapshot, getMaxCartQuantity, mergeCartItems, sanitizeCartItems } from '@/lib/cart-utils';
+import { fetchInterestRows, mapInterestRows } from '@/lib/interest-utils';
+import { normalizeOrderPayload } from '@/lib/order-normalizer';
+import type { AccountSubView, AppContextType } from './app-context-types';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const CART_STORAGE_KEY = 'cart';
-
-const areCartItemsEqual = (left: CartItem[], right: CartItem[]) => {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((item, index) => {
-    const other = right[index];
-
-    return (
-      item.id === other?.id &&
-      item.quantity === other?.quantity
-    );
-  });
-};
-
-const mergeCartItems = (localItems: CartItem[], remoteItems: CartItem[]) => {
-  const merged = new Map<string, CartItem>();
-
-  for (const item of remoteItems) {
-    merged.set(item.id, { ...item });
-  }
-
-  for (const item of localItems) {
-    const existing = merged.get(item.id);
-
-    if (existing) {
-      merged.set(item.id, {
-        ...existing,
-        quantity: existing.quantity + item.quantity,
-      });
-      continue;
-    }
-
-    merged.set(item.id, { ...item });
-  }
-
-  return Array.from(merged.values());
-};
-
-const cartSnapshot = (items: CartItem[]) =>
-  items
-    .map((item) => `${item.id}:${item.quantity}`)
-    .sort((left, right) => left.localeCompare(right))
-    .join('|');
+const INACTIVITY_WARNING_MS = 13 * 60 * 1000;
+const INACTIVITY_LOGOUT_MS = 15 * 60 * 1000;
+const INACTIVITY_EVENTS: Array<keyof WindowEventMap> = [
+  'mousedown',
+  'mousemove',
+  'keydown',
+  'scroll',
+  'touchstart',
+  'click',
+];
 
 export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [view, setView] = useState('home');
@@ -101,6 +30,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [checkoutItemIds, setCheckoutItemIds] = useState<string[] | null>(null);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchInventory, setBranchInventory] = useState<BranchInventory[]>([]);
@@ -110,6 +40,13 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [interestMap, setInterestMap] = useState<Map<string, number>>(new Map());
+  const [categoryInterestMap, setCategoryInterestMap] = useState<Map<string, number>>(new Map());
+  const [trendingSearches, setTrendingSearches] = useState<string[]>([]);
+  const [isSessionExpiryModalOpen, setIsSessionExpiryModalOpen] = useState(false);
+  const [isInactivityLoggedOutModalOpen, setIsInactivityLoggedOutModalOpen] = useState(false);
+  const inactivityWarningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inactivityLogoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isCartHydrated, setIsCartHydrated] = useState(false);
   const [isCartSyncReady, setIsCartSyncReady] = useState(false);
   const syncedCartUserIdRef = useRef<string | null>(null);
@@ -118,25 +55,41 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
 
   const fetchBranches = useCallback(async () => {
     try {
-      const res = await fetch(buildApiUrl('/api/branches'));
-      const data = await res.json();
-      setBranches(data);
+      const data = await fetchJsonWithRetry<unknown[]>(
+        '/api/branches',
+        undefined,
+        { attempts: 6, initialDelayMs: 600 },
+      );
+      setBranches(Array.isArray(data) ? (data as Branch[]) : []);
+
+      if (!Array.isArray(data)) {
+        console.error('Branches API returned a non-array payload:', data);
+      }
     } catch (error) {
       console.error('Error fetching branches:', error);
+      setBranches([]);
     }
   }, []);
 
   const fetchBranchInventory = useCallback(async (branchId: number) => {
     try {
-      const res = await fetch(buildApiUrl(`/api/branches/${branchId}/inventory`));
-      const data = await res.json();
-      setBranchInventory(data);
+      const data = await fetchJsonWithRetry<unknown[]>(
+        `/api/branches/${branchId}/inventory`,
+        undefined,
+        { attempts: 6, initialDelayMs: 600 },
+      );
+      setBranchInventory(Array.isArray(data) ? (data as BranchInventory[]) : []);
+
+      if (!Array.isArray(data)) {
+        console.error('Branch inventory API returned a non-array payload:', data);
+      }
     } catch (error) {
       console.error('Error fetching inventory:', error);
+      setBranchInventory([]);
     }
   }, []);
 
-  const handleLogout = useCallback(() => {
+  const resetClientSession = useCallback(() => {
     clearAccessToken();
     fetch(buildApiUrl('/api/auth/logout'), {
       method: 'POST',
@@ -145,7 +98,9 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     setIsLoggedIn(false);
     setUser(null);
     setCart([]);
+    setOrders([]);
     localStorage.removeItem(CART_STORAGE_KEY);
+    localStorage.removeItem('remember_me');
     setView('home');
     setIsCartOpen(false);
     setIsCartSyncReady(false);
@@ -159,24 +114,73 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
 
   const fetchUserProfile = useCallback(async () => {
     try {
-      const res = await fetchWithAuth('/api/auth/me');
-      const data = await res.json();
+      const res = await fetchWithAuthRetry('/api/auth/me', {}, { attempts: 5, initialDelayMs: 2000 });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setUser(data);
         setIsLoggedIn(true);
+      } else if (res.status === 401) {
+        resetClientSession();
+      }
+      // Silently ignore 503 — backend still starting up
+    } catch {
+      // Network error during startup — silently ignore, user stays logged in
+    }
+  }, [resetClientSession]);
+
+  const fetchCustomerOrders = useCallback(async () => {
+    try {
+      const res = await fetchWithAuth('/api/orders/my');
+      const data = await res.json().catch(() => ({ data: [] }));
+
+      if (res.ok) {
+        setOrders(normalizeOrderPayload(data?.data));
       } else {
-        console.error('Error fetching user profile:', data.error);
+        console.error('Error fetching customer orders:', data?.error || data);
         if (res.status === 401) {
-          handleLogout();
+          resetClientSession();
         }
       }
     } catch (error) {
-      console.error('Error fetching user profile:', error);
+      console.error('Error fetching customer orders:', error);
     }
-  }, [handleLogout]);
+  }, [resetClientSession]);
+
+  // Fetch trending searches once on mount — no auth needed
+  useEffect(() => {
+    fetch('/api/analytics/trending?limit=8')
+      .then((res) => res.ok ? res.json() : { data: [] })
+      .then((payload) => {
+        const items = (payload?.data ?? []) as { query: string }[];
+        setTrendingSearches(items.map((item) => item.query));
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fetch product + category interests on login, refresh every 15 minutes
+  useEffect(() => {
+    const fetchInterests = async () => {
+      const token = getAccessToken();
+      if (!token || !isLoggedIn) return;
+
+      try {
+        const [productRows, categoryRows] = await Promise.all([
+          fetchInterestRows<{ product_id: string; view_count: number }>('/api/product-interests', token),
+          fetchInterestRows<{ category: string; score: number }>('/api/category-interests', token),
+        ]);
+
+        setInterestMap(mapInterestRows(productRows, row => row.product_id, row => row.view_count));
+        setCategoryInterestMap(mapInterestRows(categoryRows, row => row.category, row => row.score));
+      } catch {}
+    };
+
+    void fetchInterests();
+    const interval = globalThis.setInterval(fetchInterests, 15 * 60 * 1000);
+    return () => globalThis.clearInterval(interval);
+  }, [isLoggedIn]);
 
   const persistCartToBackend = useCallback(async (items: CartItem[]) => {
-    const res = await fetchWithAuth('/api/cart', {
+    const res = await fetchWithAuthRetry('/api/cart', {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -190,10 +194,53 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     });
 
     if (!res.ok) {
+      // 401 means token expired (e.g. inactivity logout) — silently skip, cart is in localStorage
+      if (res.status === 401) return;
       const payload = await res.json().catch(() => null);
       throw new Error(payload?.error || 'Failed to sync cart.');
     }
   }, []);
+
+  const handleLogout = useCallback(() => {
+    void (async () => {
+      try {
+        if (user?.id) {
+          await persistCartToBackend(cart);
+        }
+      } catch (error) {
+        console.error('Error saving cart before logout:', error);
+      } finally {
+        resetClientSession();
+      }
+    })();
+  }, [cart, persistCartToBackend, resetClientSession, user?.id]);
+
+  const clearInactivityTimers = useCallback(() => {
+    if (inactivityWarningTimerRef.current) {
+      clearTimeout(inactivityWarningTimerRef.current);
+      inactivityWarningTimerRef.current = null;
+    }
+
+    if (inactivityLogoutTimerRef.current) {
+      clearTimeout(inactivityLogoutTimerRef.current);
+      inactivityLogoutTimerRef.current = null;
+    }
+  }, []);
+
+  const resetInactivityTimers = useCallback(() => {
+    clearInactivityTimers();
+    setIsSessionExpiryModalOpen(false);
+
+    inactivityWarningTimerRef.current = setTimeout(() => {
+      setIsSessionExpiryModalOpen(true);
+    }, INACTIVITY_WARNING_MS);
+
+    inactivityLogoutTimerRef.current = setTimeout(() => {
+      setIsSessionExpiryModalOpen(false);
+      handleLogout();
+      setIsInactivityLoggedOutModalOpen(true);
+    }, INACTIVITY_LOGOUT_MS);
+  }, [clearInactivityTimers, handleLogout]);
 
   useEffect(() => {
     const token = getAccessToken();
@@ -205,8 +252,9 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     const savedCart = localStorage.getItem(CART_STORAGE_KEY);
     if (savedCart) {
       const parsedCart = JSON.parse(savedCart) as CartItem[];
-      setCart(parsedCart);
-      initialLocalCartSnapshotRef.current = cartSnapshot(parsedCart);
+      const sanitizedCart = sanitizeCartItems(parsedCart);
+      setCart(sanitizedCart);
+      initialLocalCartSnapshotRef.current = cartSnapshot(sanitizedCart);
     }
 
     setIsCartHydrated(true);
@@ -218,7 +266,10 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
 
     const savedOrders = localStorage.getItem('orders');
     if (savedOrders) {
-      setOrders(JSON.parse(savedOrders));
+      const isUUID = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+      const parsed: Order[] = JSON.parse(savedOrders);
+      const migrated = parsed.filter((o) => !(!o.receiptNumber && isUUID(o.id)));
+      setOrders(migrated);
     }
 
     fetchBranches();
@@ -260,14 +311,19 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
 
     const syncCartFromBackend = async () => {
       try {
-        const res = await fetchWithAuth('/api/cart');
+        const res = await fetchWithAuthRetry('/api/cart', undefined, {
+          attempts: 5,
+          initialDelayMs: 600,
+        });
         const payload = await res.json().catch(() => ({ items: [] }));
 
         if (!res.ok) {
           throw new Error(payload?.error || 'Failed to load cart.');
         }
 
-        const remoteItems = Array.isArray(payload?.items) ? payload.items : [];
+        const remoteItems = sanitizeCartItems(
+          Array.isArray(payload?.items) ? payload.items : [],
+        );
         const localSnapshot = cartSnapshot(cart);
         const initialLocalSnapshot = initialLocalCartSnapshotRef.current;
         const remoteSnapshot = cartSnapshot(remoteItems);
@@ -290,9 +346,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
             await persistCartToBackend(nextItems);
           }
         }
-      } catch (error) {
-        console.error('Error syncing cart from backend:', error);
-
+      } catch {
         if (!isCancelled) {
           syncedCartUserIdRef.current = user.id;
           setIsCartSyncReady(true);
@@ -320,13 +374,53 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     const syncCart = async () => {
       try {
         await persistCartToBackend(cart);
-      } catch (error) {
-        console.error('Error syncing cart to backend:', error);
+      } catch {
+        // Ignore transient cart sync failures; the next cart change will retry.
       }
     };
 
     syncCart();
   }, [cart, isCartSyncReady, persistCartToBackend, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      return;
+    }
+
+    fetchCustomerOrders();
+  }, [fetchCustomerOrders, user?.id]);
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setIsSessionExpiryModalOpen(false);
+      clearInactivityTimers();
+      return;
+    }
+
+    // Skip inactivity timer when Remember Me is active
+    if (localStorage.getItem('remember_me') === 'true') {
+      clearInactivityTimers();
+      return;
+    }
+
+    resetInactivityTimers();
+
+    const handleUserActivity = () => {
+      resetInactivityTimers();
+    };
+
+    for (const eventName of INACTIVITY_EVENTS) {
+      window.addEventListener(eventName, handleUserActivity, { passive: true });
+    }
+
+    return () => {
+      for (const eventName of INACTIVITY_EVENTS) {
+        window.removeEventListener(eventName, handleUserActivity);
+      }
+
+      clearInactivityTimers();
+    };
+  }, [clearInactivityTimers, isLoggedIn, resetInactivityTimers]);
 
   const addToCart = useCallback((
     product: Product,
@@ -335,11 +429,20 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     setCart(prev => {
       const existingItem = prev.find(item => item.id === product.id);
       if (existingItem) {
-        return prev.map(item => 
-          item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+        const maxQuantity = getMaxCartQuantity(existingItem);
+        return prev.map(item =>
+          item.id === product.id
+            ? {
+                ...item,
+                quantity:
+                  maxQuantity === null
+                    ? item.quantity + 1
+                    : Math.min(item.quantity + 1, maxQuantity),
+              }
+            : item
         );
       }
-      return [...prev, { ...product, quantity: 1 }];
+      return sanitizeCartItems([...prev, { ...product, quantity: 1 }]);
     });
 
     if (options?.openCart !== false) {
@@ -351,7 +454,12 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     setCart(prev => {
       return prev.map(item => {
         if (item.id === id) {
-          const newQuantity = Math.max(0, item.quantity + delta);
+          const maxQuantity = getMaxCartQuantity(item);
+          const nextQuantity = item.quantity + delta;
+          const newQuantity =
+            maxQuantity === null
+              ? Math.max(0, nextQuantity)
+              : Math.min(Math.max(0, nextQuantity), maxQuantity);
           return { ...item, quantity: newQuantity };
         }
         return item;
@@ -385,6 +493,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     user, setUser,
     fetchUserProfile,
     cart, setCart,
+    checkoutItemIds, setCheckoutItemIds,
     selectedBranch, setSelectedBranch,
     branches,
     branchInventory,
@@ -398,7 +507,10 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     cartTotal,
     isBranchOpen,
     searchQuery,
-    setSearchQuery
+    setSearchQuery,
+    interestMap,
+    categoryInterestMap,
+    trendingSearches,
   }), [
     view,
     accountSubView,
@@ -408,6 +520,7 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     user,
     fetchUserProfile,
     cart,
+    checkoutItemIds,
     selectedBranch,
     branches,
     branchInventory,
@@ -421,11 +534,95 @@ export function AppProvider({ children }: Readonly<{ children: ReactNode }>) {
     cartTotal,
     isBranchOpen,
     searchQuery,
+    interestMap,
+    categoryInterestMap,
+    trendingSearches,
   ]);
 
   return (
     <AppContext.Provider value={contextValue}>
       {children}
+
+      <AnimatePresence>
+        {isSessionExpiryModalOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[9998]"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white rounded-3xl shadow-2xl z-[9999] overflow-hidden"
+            >
+              <div className="p-7 text-center">
+                <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-5">
+                  <span className="text-3xl">⏱</span>
+                </div>
+                <h3 className="text-xl font-black text-slate-900 mb-2 tracking-tight">Inactive Session</h3>
+                <p className="text-slate-500 text-sm leading-relaxed mb-4">
+                  You&apos;ll be logged out automatically in 2 minutes if there&apos;s still no activity.
+                </p>
+                <p className="text-slate-500 text-xs leading-relaxed mb-7">
+                  Move the mouse, scroll, tap anywhere, or press any key to keep using your account.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={resetInactivityTimers}
+                    className="flex-1 py-3 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-100"
+                  >
+                    I&apos;m Active
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isInactivityLoggedOutModalOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[9998]"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white rounded-3xl shadow-2xl z-[9999] overflow-hidden"
+            >
+              <div className="p-7 text-center">
+                <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-5">
+                  <span className="text-3xl">🔒</span>
+                </div>
+                <h3 className="text-xl font-black text-slate-900 mb-2 tracking-tight">
+                  You&apos;ve Been Logged Out
+                </h3>
+                <p className="text-slate-500 text-sm leading-relaxed mb-2">
+                  For your security, you were automatically logged out after{' '}
+                  <span className="font-semibold text-slate-700">15 minutes of inactivity</span>.
+                </p>
+                <p className="text-slate-400 text-xs leading-relaxed mb-7">
+                  Your cart has been saved. Please log in again to continue shopping.
+                </p>
+                <button
+                  onClick={() => setIsInactivityLoggedOutModalOpen(false)}
+                  className="w-full py-3 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-100"
+                >
+                  OK, Log Me In
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </AppContext.Provider>
   );
 }
