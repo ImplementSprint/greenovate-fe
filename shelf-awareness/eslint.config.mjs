@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "coverage/**",
+    "scm-frontend/**",
     "next-env.d.ts",
   ]),
   {
