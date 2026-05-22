@@ -22,6 +22,5 @@ RUN npm ci --omit=dev \
 	&& rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
-COPY next.config.ts ./next.config.ts
 EXPOSE 3000
 CMD ["node", "node_modules/next/dist/bin/next", "start", "-p", "3000"]
