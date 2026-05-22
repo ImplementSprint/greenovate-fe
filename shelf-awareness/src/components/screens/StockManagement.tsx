@@ -883,7 +883,7 @@ export function StockManagement() {
                     Reason
                   </div>
                   <div className="text-sm text-[#1A2B47] italic">
-                    "{modalAdj.reason}"
+                    &quot;{modalAdj.reason}&quot;
                   </div>
                 </div>
 
@@ -2086,7 +2086,7 @@ export function StockManagement() {
                           </span>
                         </div>
                         <p className="text-sm text-[#6B7280] italic">
-                          "{a.reason}"
+                          &quot;{a.reason}&quot;
                         </p>
                         <div className="flex gap-2">
                           <Button

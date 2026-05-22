@@ -103,8 +103,8 @@ export default function KPIScorecardBar() {
         {isLoading && kpis.length === 0 ? (
           Array.from({ length: 5 }).map((_, idx) => <KPISkeletonCard key={idx} index={idx} />)
         ) : kpis.map((kpi, idx) => {
-          let deltaColor = KPIColor(kpi.label, kpi.delta, kpi.inverseGood);
-          let trendColor = deltaColor;
+          const deltaColor = KPIColor(kpi.label, kpi.delta, kpi.inverseGood);
+          const trendColor = deltaColor;
           let DeltaIcon = Minus;
 
           if (kpi.delta > 0) {
