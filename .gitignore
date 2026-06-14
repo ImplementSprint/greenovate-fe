@@ -1,6 +1,7 @@
 **/node_modules/
 **/.next/
-**/.vercel/
+**/.vercel/.env*
+**/.vercel/output/
 **/coverage/
 **/.swc/
 **/out/
