@@ -96,9 +96,6 @@
         "tsx": "^4.21.0",
         "typescript": "^5.9.3"
     },
-    "overrides": {
-        "postcss": "8.5.15"
-    },
     "description": "This is a code bundle for Design Log. The original project is available at https://www.figma.com/design/Gp9tJFj47Xx36LdY2RUXRA/Design-Log.",
     "main": "index.js",
     "keywords": [],
