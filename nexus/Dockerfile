@@ -1,4 +1,8 @@
-FROM node:22-alpine3.23 AS builder
+FROM node:22-alpine3.23 AS base
+
+RUN apk upgrade --no-cache
+
+FROM base AS builder
 
 WORKDIR /app
 
@@ -19,7 +23,7 @@ ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 RUN npm run build:POS-frontend
 
 # Production image
-FROM node:22-alpine3.23 AS runner
+FROM base AS runner
 
 WORKDIR /app
 

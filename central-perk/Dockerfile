@@ -43,7 +43,9 @@ ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
 COPY package.json package-lock.json ./
-COPY --from=builder /app/node_modules ./node_modules
+RUN npm ci --omit=dev \
+  && npm cache clean --force \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/next.config.ts ./next.config.ts
