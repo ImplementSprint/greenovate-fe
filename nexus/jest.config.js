@@ -11,6 +11,7 @@ const customJestConfig = {
   collectCoverage: true,
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'json-summary'],
+  collectCoverageFrom: ['src/utils/vatCalculator.ts'],
   testPathIgnorePatterns: ['/node_modules/', '\\.spec\\.ts$'],
 };
 
