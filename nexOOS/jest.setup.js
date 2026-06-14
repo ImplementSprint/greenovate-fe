@@ -6,6 +6,7 @@ const {
   TransformStream,
   WritableStream,
 } = require('stream/web');
+const { MessageChannel, MessagePort } = require('worker_threads');
 
 if (!global.TextEncoder) {
   global.TextEncoder = TextEncoder;
@@ -27,12 +28,20 @@ if (!global.WritableStream) {
   global.WritableStream = WritableStream;
 }
 
+if (!global.MessageChannel) {
+  global.MessageChannel = MessageChannel;
+}
+
+if (!global.MessagePort) {
+  global.MessagePort = MessagePort;
+}
+
 const {
   fetch,
   Headers,
   Request,
   Response,
-} = require('next/dist/compiled/@edge-runtime/primitives/fetch');
+} = require('undici');
 
 if (!global.fetch) {
   global.fetch = fetch;

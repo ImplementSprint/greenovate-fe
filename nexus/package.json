@@ -18,7 +18,7 @@
     "test:load:simple:POS-frontend": "k6 run tests/k6/load-test.js",
     "test:integration:POS-frontend": "jest --testPathPattern=tests/integration --testEnvironment=node --runInBand",
     "test:all:POS-frontend": "jest",
-    "test": "node scripts/pass-ci.js",
+    "test": "jest tests/unit --runInBand --coverage --coverageReporters=lcov --coverageReporters=json-summary",
     "lint": "eslint .",
     "build": "next build"
   },
