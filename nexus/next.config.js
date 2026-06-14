@@ -25,7 +25,9 @@ const nextConfig = {
         RECEIPT_SERVICE_URL: process.env.RECEIPT_SERVICE_URL || 'http://localhost:4006',
         TRANSACTION_SERVICE_URL: process.env.TRANSACTION_SERVICE_URL || 'http://localhost:4007',
     },
-    output: 'standalone',
+    // Vercel manages its own server infrastructure and does not support 'standalone'.
+    // Use standalone output only when deploying to Docker/custom Node.js hosting.
+    output: process.env.VERCEL ? undefined : 'standalone',
 };
 
 module.exports = nextConfig;
