@@ -1,5 +1,6 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
+RUN apk upgrade --no-cache
 
 # Declare build-time env vars (NEXT_PUBLIC_* must be baked in at build time)
 ARG NEXT_PUBLIC_SUPABASE_URL
@@ -55,6 +56,7 @@ RUN npm run build
 # Production runner using standalone output
 FROM node:20-alpine AS runner
 WORKDIR /app
+RUN apk upgrade --no-cache
 
 ENV NODE_ENV=production
 ENV PORT=5173
