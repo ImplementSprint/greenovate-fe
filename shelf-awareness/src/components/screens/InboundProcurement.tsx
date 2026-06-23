@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
   Calendar,
   Plus,
@@ -21,7 +21,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "../ui/tabs";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Select,
   SelectContent,
@@ -29,13 +29,43 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+import { SearchableProductSelect } from "../shared/SearchableProductSelect";
 import { toast } from "sonner";
 import { supabase } from "../../lib/supabase";
 import {
+  blockInvalidNumberKeys,
+  isPhoneValid,
+  sanitizeDecimalInput,
+  sanitizeIntegerInput,
+  sanitizePhoneInput,
+} from "../../lib/inputSanitizers";
+import {
   fetchSupplierByName,
+  createSupplier as createSupplierFromService,
   fetchSupplierScorecard as fetchSupplierScorecardFromService,
   fetchSuppliers,
+  type SupplierRecord,
 } from "../../lib/supplierService";
+import {
+  createFreightQuote,
+  fetchPurchaseOrders as fetchPurchaseOrdersFromService,
+  fetchPurchaseOrderById,
+  fetchFreightQuotes,
+  fetchPurchaseOrderItems,
+  fetchProductAssociations,
+  updatePurchaseOrder,
+  updatePurchaseOrderStatus,
+  createPurchaseOrder,
+  createPurchaseOrderItem,
+  updatePurchaseOrderItem,
+  deletePurchaseOrderItem,
+  fetchNextPurchaseOrderNumber,
+  importPurchaseOrder,
+  selectWinnerFreightQuote,
+  type FreightQuoteRecord,
+} from "../../lib/procurementService";
+import { notifyDashboardDataChanged } from "@/lib/dashboardInvalidation";
+import { listCatalogProducts } from "../../lib/productCatalogService";
 import { CSVUploader } from "../CSVUploader";
 import type { CSVRow } from "../../lib/csvParser";
 import { 
@@ -53,7 +83,6 @@ import {
   TableHeader, 
   TableRow 
 } from "../ui/table";
-
 type TabFilter = "all" | "draft" | "posted";
 
 interface PurchaseOrderRow {
@@ -79,6 +108,7 @@ interface ProductRow {
   product_name: string | null;
   unit: string | null;
   barcode: string | null;
+  supplier: string | null;
 }
 
 interface SupplierScorecardRow {
@@ -105,7 +135,7 @@ interface LineItemForm {
   formId: string;
   editingPoItemId: string | null;
   product: string;
-  qty: number;
+  qty: string;
 }
 
 interface POTemplate {
@@ -114,6 +144,29 @@ interface POTemplate {
   supplier_name: string;
   expected_delivery_date: string;
   preferred_communication: string;
+}
+
+interface SupplierFormState {
+  supplier_name: string;
+  contact_person: string;
+  email: string;
+  phone: string;
+  address: string;
+  currency_code: string;
+}
+
+interface FreightQuoteRow {
+  id: string;
+  provider: string;
+  freightType: string;
+  cost: number;
+  days: number;
+  winner: boolean;
+}
+
+interface BundleSuggestionState {
+  triggerProduct: string;
+  recommendedProduct: string;
 }
 
 const DEFAULT_PO_STATUS = "Draft";
@@ -186,8 +239,66 @@ const formatPercent = (value: number | null | undefined) => {
   return Number(value).toFixed(1);
 };
 
+const builderInputClass =
+  "mt-2 rounded-lg border border-[#1A2B47]/25 bg-white shadow-sm focus-visible:border-[#00A3AD] focus-visible:ring-[#00A3AD]/20";
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const CURRENCY_CODE_REGEX = /^[A-Z]{3}$/;
+
+const createEmptySupplierForm = (): SupplierFormState => ({
+  supplier_name: "",
+  contact_person: "",
+  email: "",
+  phone: "",
+  address: "",
+  currency_code: "",
+});
+
+const validateSupplierForm = (
+  form: SupplierFormState,
+) => {
+  const errors: Partial<Record<keyof SupplierFormState, string>> =
+    {};
+
+  if (!form.supplier_name.trim()) {
+    errors.supplier_name = "Supplier name is required.";
+  }
+  if (!form.contact_person.trim()) {
+    errors.contact_person = "Contact person is required.";
+  }
+  if (!form.email.trim()) {
+    errors.email = "Email is required.";
+  } else if (!EMAIL_REGEX.test(form.email.trim())) {
+    errors.email = "Enter a valid email address.";
+  }
+  if (!form.phone.trim()) {
+    errors.phone = "Phone is required.";
+  } else if (!isPhoneValid(form.phone.trim())) {
+    errors.phone = "Phone number must be up to 10 digits.";
+  }
+  if (!form.address.trim()) {
+    errors.address = "Address is required.";
+  }
+  if (!form.currency_code.trim()) {
+    errors.currency_code = "Currency code is required.";
+  } else if (
+    !CURRENCY_CODE_REGEX.test(
+      form.currency_code.trim().toUpperCase(),
+    )
+  ) {
+    errors.currency_code = "Use PHP or JPY.";
+  }
+
+  return errors;
+};
+
+const CURRENCY_OPTIONS = ["PHP", "JPY"] as const;
+
 export function InboundProcurement() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const prefillSku = searchParams.get("prefillSku");
+  const prefillConsumed = useRef(false);
   const [activeTab, setActiveTab] = useState<TabFilter>("all");
 
   const [poList, setPoList] = useState<PurchaseOrderRow[]>([]);
@@ -203,10 +314,15 @@ export function InboundProcurement() {
   const [selectedSupplierId, setSelectedSupplierId] = useState("");
   const [supplierScorecard, setSupplierScorecard] =
     useState<SupplierScorecardRow | null>(null);
-  const [supplierOptions, setSupplierOptions] = useState<string[]>(
+  const [supplierRecords, setSupplierRecords] = useState<
+    SupplierRecord[]
+  >(
     [],
   );
-  const [, setLoadingSupplierScorecard] = useState(false);
+  const [
+    loadingSupplierScorecard,
+    setLoadingSupplierScorecard,
+  ] = useState(false);
   const [expectedDeliveryDate, setExpectedDeliveryDate] =
     useState("");
   const [preferredCommunication, setPreferredCommunication] =
@@ -215,6 +331,17 @@ export function InboundProcurement() {
   const [lineItemForms, setLineItemForms] = useState<
     LineItemForm[]
   >([]);
+  const [showCreateSupplierDialog, setShowCreateSupplierDialog] =
+    useState(false);
+  const [bundleSuggestion, setBundleSuggestion] =
+    useState<BundleSuggestionState | null>(null);
+  const [supplierForm, setSupplierForm] = useState<SupplierFormState>(
+    createEmptySupplierForm(),
+  );
+  const [supplierFormErrors, setSupplierFormErrors] = useState<
+    Partial<Record<keyof SupplierFormState, string>>
+  >({});
+  const [savingSupplier, setSavingSupplier] = useState(false);
 
   // Template state
   const [templates, setTemplates] = useState<POTemplate[]>([]);
@@ -223,11 +350,9 @@ export function InboundProcurement() {
 
   // Freight quotes state
   const [showQuotes, setShowQuotes] = useState(false);
-  const [quotes, setQuotes] = useState([
-    { id: "1", provider: "Nippon Yusen (NYK Line)", freightType: "Sea", cost: 350000, days: 14, winner: false },
-    { id: "2", provider: "Japan Airlines Cargo", freightType: "Air", cost: 620000, days: 4, winner: false }
-  ]);
+  const [quotes, setQuotes] = useState<FreightQuoteRow[]>([]);
   const [newQuote, setNewQuote] = useState({ provider: "", freightType: "", cost: "", days: "" });
+  const [loadingQuotes, setLoadingQuotes] = useState(false);
 
   const [loadingPOs, setLoadingPOs] = useState(false);
   const [loadingItems, setLoadingItems] = useState(false);
@@ -236,6 +361,7 @@ export function InboundProcurement() {
   const [sendingPO, setSendingPO] = useState(false);
   const [isEditingPO, setIsEditingPO] = useState(true);
   const [importingPO, setImportingPO] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
   
   // Import preview modal state
   const [showImportPreview, setShowImportPreview] = useState(false);
@@ -251,6 +377,18 @@ export function InboundProcurement() {
   };
 
   const normalizeSku = (value: string) => (value ?? "").trim().toLowerCase();
+  const supplierOptions = useMemo(() => {
+    const productSuppliers = products
+      .map((product) => product.supplier?.trim() ?? "")
+      .filter(Boolean);
+    const supplierNames = supplierRecords
+      .map((supplier) => supplier.supplier_name?.trim() ?? "")
+      .filter(Boolean);
+
+    return Array.from(
+      new Set([...supplierNames, ...productSuppliers]),
+    ).sort((left, right) => left.localeCompare(right));
+  }, [products, supplierRecords]);
 
   const checkSkuMismatches = async (rows: CSVRow[]) => {
     const uniqueSkus = Array.from(
@@ -263,19 +401,10 @@ export function InboundProcurement() {
     }
 
     setCheckingSkus(true);
-    const { data, error } = await supabase
-      .from("products")
-      .select("sku")
-      .in("sku", uniqueSkus);
-
+    const data = await listCatalogProducts({ limit: 1000 });
     setCheckingSkus(false);
 
-    if (error) {
-      toast.error("Failed to validate SKUs", { description: error.message });
-      return;
-    }
-
-    const existing = new Set((data ?? []).map((row) => normalizeSku(row.sku || "")));
+    const existing = new Set(data.map((row: any) => normalizeSku(row.sku || "")));
     const mismatches = new Set(
       uniqueSkus.filter((sku) => !existing.has(sku)),
     );
@@ -329,9 +458,7 @@ export function InboundProcurement() {
   const fetchSupplierOptions = useCallback(async () => {
     try {
       const suppliers = await fetchSuppliers();
-      setSupplierOptions(
-        suppliers.map((supplier) => supplier.supplier_name),
-      );
+      setSupplierRecords(suppliers);
     } catch (error) {
       console.error("Supplier list fetch error", error);
     }
@@ -339,105 +466,60 @@ export function InboundProcurement() {
 
   const fetchPurchaseOrders = useCallback(async () => {
     setLoadingPOs(true);
-    const { data, error } = await supabase
-      .from("purchase_orders")
-      .select(
-        "po_id, po_no, supplier_name, status, created_at, expected_delivery_date, preferred_communication",
-      )
-      .order("created_at", { ascending: false });
-    setLoadingPOs(false);
-
-    if (error) {
+    try {
+      const data = await fetchPurchaseOrdersFromService();
+      setPoList(data);
+    } catch (error) {
       toast.error("Failed to load purchase orders", {
         description: toErrorMessage(error),
       });
       setPoList([]);
-      return;
+    } finally {
+      setLoadingPOs(false);
     }
-    setPoList(data ?? []);
   }, []);
 
   const fetchProducts = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("products")
-      .select("sku, product_name, unit, barcode")
-      .order("product_name", { ascending: true });
-
-    if (error) {
+    try {
+      const data = await listCatalogProducts({ limit: 1000 });
+      setProducts(data as any);
+    } catch (error) {
       toast.error("Failed to load product master", {
         description: toErrorMessage(error),
       });
       setProducts([]);
-      return;
     }
-    setProducts(data ?? []);
   }, []);
 
   const fetchPOItems = useCallback(async (poId: string) => {
     setLoadingItems(true);
-    const { data, error } = await supabase
-      .from("purchase_order_items")
-      .select("po_item_id, po_id, item_name, quantity")
-      .eq("po_id", poId)
-      .order("po_item_id", { ascending: true });
-    setLoadingItems(false);
-
-    if (error) {
+    try {
+      const data = await fetchPurchaseOrderItems(poId);
+      setSelectedPOItems(data);
+    } catch (error) {
       toast.error("Failed to load purchase order items", {
         description: toErrorMessage(error),
       });
       setSelectedPOItems([]);
-      return;
+    } finally {
+      setLoadingItems(false);
     }
-    setSelectedPOItems(data ?? []);
   }, []);
 
   const generateUniquePONumber = useCallback(async () => {
-    const year = new Date().getFullYear();
-    const prefix = `PO-JP-${year}-`;
-
-    const { data, error } = await supabase
-      .from("purchase_orders")
-      .select("po_no")
-      .like("po_no", `${prefix}%`);
-
-    if (error) throw error;
-
-    const maxSuffix = (data ?? []).reduce((max, row) => {
-      const value = row.po_no ?? "";
-      const match = value.match(
-        new RegExp(`^${prefix}(\\d+)$`),
-      );
-      if (!match) return max;
-      const n = Number(match[1]);
-      if (Number.isNaN(n)) return max;
-      return Math.max(max, n);
-    }, 0);
-
-    return `${prefix}${String(maxSuffix + 1).padStart(4, "0")}`;
+    return fetchNextPurchaseOrderNumber();
   }, []);
 
   const updatePOHeader = useCallback(
     async (poId: string, status: string, resolvedSupplierName: string) => {
-      const { data, error } = await supabase
-        .from("purchase_orders")
-        .update({
-          po_no: poNo || null,
-          supplier_name: resolvedSupplierName || null,
-          expected_delivery_date: expectedDeliveryDate || null,
-          preferred_communication:
-            preferredCommunication || null,
-          status,
-        })
-        .eq("po_id", poId)
-        .select(
-          "po_id, po_no, supplier_name, status, created_at, expected_delivery_date, preferred_communication",
-        )
-        .single();
-
-      if (error || !data)
-        throw error ?? new Error("Update failed");
-      return data as PurchaseOrderRow;
+      return updatePurchaseOrder(poId, {
+        po_no: poNo || null,
+        supplier_name: resolvedSupplierName || null,
+        expected_delivery_date: expectedDeliveryDate || null,
+        preferred_communication:
+          preferredCommunication || null,
+        status,
+      }) as Promise<PurchaseOrderRow>;
     },
     [
       expectedDeliveryDate,
@@ -459,44 +541,45 @@ export function InboundProcurement() {
       let target: PurchaseOrderRow;
       const supplier = await resolveSupplierDetails();
       if (selectedPO?.po_id) {
-        target = await updatePOHeader(
+        target = await updatePurchaseOrder(
           selectedPO.po_id,
-          DEFAULT_PO_STATUS,
-          supplier.supplier_name,
+          {
+            status: DEFAULT_PO_STATUS,
+            supplier_name: supplier.supplier_name,
+          }
         );
       } else {
         const generatedPoNo =
-          poNo || (await generateUniquePONumber());
+          poNo || (await fetchNextPurchaseOrderNumber());
         if (!poNo) setPoNo(generatedPoNo);
         const nowIso = new Date().toISOString();
-        const { data, error } = await supabase
-          .from("purchase_orders")
-          .insert([
-            {
-              po_no: generatedPoNo,
-              supplier_name: supplier.supplier_name,
-              status: DEFAULT_PO_STATUS,
-              created_at: nowIso,
-              paid_at: nowIso,
-              expected_delivery_date:
-                expectedDeliveryDate || null,
-              preferred_communication:
-                preferredCommunication || null,
-            },
-          ])
-          .select(
-            "po_id, po_no, supplier_name, status, created_at, expected_delivery_date, preferred_communication",
-          )
-          .single();
-
-        if (error || !data)
-          throw error ?? new Error("Insert failed");
-        target = data as PurchaseOrderRow;
+        target = (await createPurchaseOrder({
+          po_no: generatedPoNo,
+          supplier_name: supplier.supplier_name,
+          status: DEFAULT_PO_STATUS,
+          created_at: nowIso,
+          paid_at: nowIso,
+          expected_delivery_date: expectedDeliveryDate || null,
+          preferred_communication:
+            preferredCommunication || null,
+        })) as PurchaseOrderRow;
       }
 
       setSelectedPO(target);
+      
+      // Sync local items
+      for (const item of selectedPOItems) {
+        if (item.po_id === "temporary") {
+          await createPurchaseOrderItem(target.po_id, {
+            item_name: item.item_name || "",
+            quantity: item.quantity || 0,
+          });
+        }
+      }
+
       await fetchPurchaseOrders();
       await fetchPOItems(target.po_id);
+      notifyDashboardDataChanged("procurement:draft-saved");
       toast.success("Saved to drafts", {
         description: `${target.po_no ?? "Purchase order"} is now in Drafts.`,
       });
@@ -536,51 +619,49 @@ export function InboundProcurement() {
           poNo || (await generateUniquePONumber());
         if (!poNo) setPoNo(generatedPoNo);
         const nowIso = new Date().toISOString();
-        const { data, error } = await supabase
-          .from("purchase_orders")
-          .insert([
-            {
-              po_no: generatedPoNo,
-              supplier_name: supplier.supplier_name,
-              status: DEFAULT_PO_STATUS,
-              created_at: nowIso,
-              paid_at: nowIso,
-              expected_delivery_date:
-                expectedDeliveryDate || null,
-              preferred_communication:
-                preferredCommunication || null,
-            },
-          ])
-          .select(
-            "po_id, po_no, supplier_name, status, created_at, expected_delivery_date, preferred_communication",
-          )
-          .single();
-
-        if (error || !data)
-          throw error ?? new Error("Insert failed");
+        
+        const data = await createPurchaseOrder({
+          po_no: generatedPoNo,
+          supplier_name: supplier.supplier_name,
+          status: DEFAULT_PO_STATUS,
+          created_at: nowIso,
+          paid_at: nowIso,
+          expected_delivery_date: expectedDeliveryDate || null,
+          preferred_communication: preferredCommunication || null,
+        }) as PurchaseOrderRow;
+        
         targetPoId = data.po_id;
-        setSelectedPO(data as PurchaseOrderRow);
+        setSelectedPO(data);
+
+        // Sync local items
+        for (const item of selectedPOItems) {
+          if (item.po_id === "temporary") {
+            await createPurchaseOrderItem(targetPoId, {
+              item_name: item.item_name || "",
+              quantity: item.quantity || 0,
+            });
+          }
+        }
       }
 
-      const { count, error: countError } = await supabase
-        .from("purchase_order_items")
-        .select("po_item_id", { count: "exact", head: true })
-        .eq("po_id", targetPoId);
-      if (countError) throw countError;
-      if (!count || count <= 0) {
+      const itemRows = await fetchPurchaseOrderItems(targetPoId);
+      if (!itemRows || itemRows.length === 0) {
         toast.error("Cannot send purchase order", {
           description: "Add at least one line item first",
         });
         return;
       }
 
-      const updated = await updatePOHeader(
+      const updated = await updatePurchaseOrder(
         targetPoId,
-        "Posted",
-        supplier.supplier_name,
+        {
+          status: "Posted",
+          supplier_name: supplier.supplier_name,
+        }
       );
       setSelectedPO(updated);
       await fetchPurchaseOrders();
+      notifyDashboardDataChanged("procurement:po-posted");
       toast.success("Sent to supplier", {
         description: `${updated.po_no ?? "Purchase order"} is now Posted.`,
       });
@@ -644,45 +725,34 @@ export function InboundProcurement() {
           items: cleanedItems,
         };
 
-        const { data, error } = await supabase.rpc(
-          "bulk_import_po",
-          { p_payload: payload },
-        );
-        if (error) {
-          toast.error("Import failed", {
-            description: toErrorMessage(error),
-          });
-          return;
-        }
+        const data = await importPurchaseOrder(payload);
 
         toast.success("PO imported", {
           description: "Bulk items inserted via RPC.",
         });
         setShowImportPreview(false);
         await fetchPurchaseOrders();
+        notifyDashboardDataChanged("procurement:po-imported");
 
         // Attempt to select the newly created PO using returned UUID if present
         const newId = typeof data === "string" ? data : null;
         if (newId) {
-          const match = (
-            await supabase
-              .from("purchase_orders")
-              .select(
-                "po_id, po_no, supplier_name, status, created_at, expected_delivery_date, preferred_communication, paid_at",
-              )
-              .eq("po_id", newId)
-              .single()
-          ).data as PurchaseOrderRow | null;
+          const match = await fetchPurchaseOrderById(newId);
           if (match) {
             if (!match.paid_at) {
-              await supabase
-                .from("purchase_orders")
-                .update({ paid_at: match.created_at })
-                .eq("po_id", newId);
-              match.paid_at = match.created_at as string;
+              const updated = await updatePurchaseOrder(
+                newId,
+                {
+                  status: match.status || DEFAULT_PO_STATUS,
+                  supplier_name: match.supplier_name || "",
+                  paid_at: match.created_at
+                }
+              );
+              setSelectedPO(updated);
+            } else {
+              setSelectedPO(match);
             }
-            setSelectedPO(match);
-            await fetchPOItems(match.po_id);
+            await fetchPOItems(newId);
             setIsEditingPO(false);
             return;
           }
@@ -709,6 +779,49 @@ export function InboundProcurement() {
     ],
   );
 
+  const addRecommendedItem = useCallback((productName: string) => {
+    const duplicateExists = selectedPOItems.some(
+      (item) =>
+        (item.item_name ?? "").trim().toLowerCase() ===
+        productName.trim().toLowerCase(),
+    );
+    if (duplicateExists) {
+      toast.info("Product already in PO", {
+        description: `${productName} is already a line item in this PO.`
+      });
+      return;
+    }
+
+    setLineItemForms(prev => [
+      ...prev,
+      {
+        formId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        editingPoItemId: null,
+        product: productName,
+        qty: "100",
+      }
+    ]);
+
+    toast.success("Recommendation prefilled!", {
+      description: `Adjust quantity and save to add ${productName.split(" - ")[1] || productName} to PO.`
+    });
+  }, [selectedPOItems]);
+
+  const checkAssociationsForProduct = useCallback(async (productName: string) => {
+    try {
+      const res = await fetchProductAssociations(productName);
+      if (res && res.associations && res.associations.length > 0) {
+        const topRec = res.associations[0];
+        setBundleSuggestion({
+          triggerProduct: productName,
+          recommendedProduct: topRec.product_name,
+        });
+      }
+    } catch (e) {
+      console.error("Error in associations check", e);
+    }
+  }, []);
+
   const savePOItem = useCallback(
     async (formId: string) => {
       const form = lineItemForms.find(
@@ -716,22 +829,31 @@ export function InboundProcurement() {
       );
       if (!form) return;
 
-      if (!selectedPO?.po_id) {
-        toast.error("Cannot save line item", {
-          description: "Select a purchase order first",
-        });
-        return;
-      }
       if (!form.product) {
         toast.error("Cannot save line item", {
           description: "Product is required",
         });
         return;
       }
-      if (!Number.isFinite(form.qty) || form.qty <= 0) {
+      const parsedQty = Number.parseInt(form.qty, 10);
+      if (!Number.isFinite(parsedQty) || parsedQty <= 0) {
         toast.error("Cannot save line item", {
           description: "Quantity must be greater than 0",
         });
+        return;
+      }
+
+      if (!selectedPO?.po_id) {
+        const newItem: PurchaseOrderItemRow = {
+          po_item_id: `temp-${Date.now()}`,
+          po_id: "temporary",
+          item_name: form.product,
+          quantity: parsedQty,
+        };
+        setSelectedPOItems(prev => [...prev, newItem]);
+        setLineItemForms(prev => prev.filter(f => f.formId !== formId));
+        toast.success("Item added to local draft");
+        void checkAssociationsForProduct(form.product);
         return;
       }
 
@@ -739,12 +861,14 @@ export function InboundProcurement() {
 
       let error: unknown = null;
       if (form.editingPoItemId) {
-        const result = await supabase
-          .from("purchase_order_items")
-          .update({ quantity: form.qty })
-          .eq("po_id", selectedPO.po_id)
-          .eq("po_item_id", form.editingPoItemId);
-        error = result.error;
+        try {
+          await updatePurchaseOrderItem(selectedPO.po_id, form.editingPoItemId, {
+            item_name: form.product,
+            quantity: parsedQty,
+          });
+        } catch (err) {
+          error = err;
+        }
       } else {
         const duplicateExists = selectedPOItems.some(
           (item) =>
@@ -758,16 +882,14 @@ export function InboundProcurement() {
           });
           return;
         }
-        const result = await supabase
-          .from("purchase_order_items")
-          .insert([
-            {
-              po_id: selectedPO.po_id,
-              item_name: form.product,
-              quantity: form.qty,
-            },
-          ]);
-        error = result.error;
+        try {
+          await createPurchaseOrderItem(selectedPO.po_id, {
+            item_name: form.product,
+            quantity: parsedQty,
+          });
+        } catch (err) {
+          error = err;
+        }
       }
       setAddingItem(false);
 
@@ -787,12 +909,19 @@ export function InboundProcurement() {
         prev.filter((f) => f.formId !== formId),
       );
       await fetchPOItems(selectedPO.po_id);
+      notifyDashboardDataChanged(
+        form.editingPoItemId
+          ? "procurement:po-item-updated"
+          : "procurement:po-item-created",
+      );
+      void checkAssociationsForProduct(form.product);
     },
     [
       fetchPOItems,
       lineItemForms,
       selectedPO?.po_id,
       selectedPOItems,
+      checkAssociationsForProduct,
     ],
   );
 
@@ -812,25 +941,23 @@ export function InboundProcurement() {
       if (!selectedPO?.po_id) return;
 
       setAddingItem(true);
-      const { error } = await supabase
-        .from("purchase_order_items")
-        .delete()
-        .eq("po_id", selectedPO.po_id)
-        .eq("po_item_id", form.editingPoItemId);
-      setAddingItem(false);
-
-      if (error) {
-        toast.error("Failed to delete line item", {
-          description: toErrorMessage(error),
-        });
-        return;
+      let error: unknown = null;
+      try {
+        await deletePurchaseOrderItem(
+          selectedPO.po_id,
+          form.editingPoItemId,
+        );
+      } catch (err) {
+        error = err;
       }
+      setAddingItem(false);
 
       toast.success("Line item deleted");
       setLineItemForms((prev) =>
         prev.filter((f) => f.formId !== formId),
       );
       await fetchPOItems(selectedPO.po_id);
+      notifyDashboardDataChanged("procurement:po-item-deleted");
     },
     [fetchPOItems, lineItemForms, selectedPO?.po_id],
   );
@@ -872,6 +999,27 @@ export function InboundProcurement() {
     }
   };
 
+  useEffect(() => {
+    if (prefillSku && products.length > 0 && !prefillConsumed.current) {
+      prefillConsumed.current = true;
+      const product = products.find((p) => normalizeSku(p.sku || "") === normalizeSku(prefillSku));
+      if (product) {
+        openBuilder().then(() => {
+          setLineItemForms([{
+            formId: crypto.randomUUID(),
+            editingPoItemId: null,
+            product: buildProductLabel(product),
+            qty: "1",
+          }]);
+          toast.success("Product Prefilled", {
+            description: `${product.sku} has been added to the P.O. Builder.`,
+          });
+          document.getElementById("po-builder-card")?.scrollIntoView({ behavior: 'smooth' });
+        });
+      }
+    }
+  }, [prefillSku, products]);
+
   const selectPO = (po: PurchaseOrderRow) => {
     setSelectedPO(po);
     setIsEditingPO(false);
@@ -896,25 +1044,22 @@ export function InboundProcurement() {
         });
         return;
       }
-      const { data, error } = await supabase
-        .from("purchase_orders")
-        .update({ status: targetStatus })
-        .eq("po_id", selectedPO.po_id)
-        .select(
-          "po_id, po_no, supplier_name, status, created_at, expected_delivery_date, preferred_communication",
-        )
-        .single();
-      if (error || !data) {
+      try {
+        const updated = await updatePurchaseOrder(
+          selectedPO.po_id,
+          { status: targetStatus }
+        );
+        setSelectedPO(updated as PurchaseOrderRow);
+        await fetchPurchaseOrders();
+        notifyDashboardDataChanged("procurement:status-updated");
+        toast.success("Status updated", {
+          description: `${updated.po_no ?? "Purchase order"} is now ${targetStatus}.`,
+        });
+      } catch (error) {
         toast.error("Failed to update status", {
           description: toErrorMessage(error),
         });
-        return;
       }
-      setSelectedPO(data as PurchaseOrderRow);
-      await fetchPurchaseOrders();
-      toast.success("Status updated", {
-        description: `${data.po_no ?? "Purchase order"} is now ${targetStatus}.`,
-      });
     },
     [fetchPurchaseOrders, selectedPO, statusFlow],
   );
@@ -978,36 +1123,166 @@ export function InboundProcurement() {
     setSelectedTemplateId("");
   }, [templates]);
 
+  const mapFreightQuote = useCallback(
+    (quote: FreightQuoteRecord): FreightQuoteRow => ({
+      id: quote.id,
+      provider: quote.provider,
+      freightType: quote.freight_type,
+      cost: Number(quote.cost),
+      days: Number(quote.estimated_days),
+      winner: Boolean(quote.is_winner),
+    }),
+    [],
+  );
+
+  const loadQuotes = useCallback(async (poId: string) => {
+    setLoadingQuotes(true);
+    try {
+      const data = await fetchFreightQuotes(poId);
+      setQuotes(data.map(mapFreightQuote));
+    } catch (error) {
+      toast.error("Failed to load freight quotes", {
+        description: toErrorMessage(error),
+      });
+      setQuotes([]);
+    } finally {
+      setLoadingQuotes(false);
+    }
+  }, [mapFreightQuote]);
+
   // Freight quote handlers
-  const addQuote = useCallback(() => {
+  const addQuote = useCallback(async () => {
+    if (!selectedPO?.po_id) {
+      toast.error("Save the draft first", {
+        description: "A purchase order record is required before adding freight quotes.",
+      });
+      return;
+    }
+
     if (!newQuote.provider || !newQuote.freightType || !newQuote.cost || !newQuote.days) {
       toast.error("All quote fields are required");
       return;
     }
-    
-    setQuotes((prev) => [
-      ...prev,
-      {
-        id: `${Date.now()}`,
-        provider: newQuote.provider,
+
+    try {
+      await createFreightQuote(selectedPO.po_id, {
+        provider: newQuote.provider.trim(),
         freightType: newQuote.freightType,
         cost: Number(newQuote.cost),
         days: Number(newQuote.days),
-        winner: false
-      }
-    ]);
-    setNewQuote({ provider: "", freightType: "", cost: "", days: "" });
-    toast.success("Quote added");
-  }, [newQuote]);
+      });
+      await loadQuotes(selectedPO.po_id);
+      notifyDashboardDataChanged("procurement:freight-quote-created");
+      setNewQuote({ provider: "", freightType: "", cost: "", days: "" });
+      toast.success("Quote added");
+    } catch (error) {
+      toast.error("Failed to add quote", {
+        description: toErrorMessage(error),
+      });
+    }
+  }, [loadQuotes, newQuote, selectedPO?.po_id]);
 
-  const selectWinner = useCallback((id: string) => {
-    setQuotes((prev) => prev.map((q) => ({ ...q, winner: q.id === id })));
-    toast.success("Freight quote selected as winner");
-  }, []);
+  const selectWinner = useCallback(async (id: string) => {
+    if (!selectedPO?.po_id) {
+      toast.error("Purchase order not found");
+      return;
+    }
+
+    try {
+      await selectWinnerFreightQuote(selectedPO.po_id, id);
+      await loadQuotes(selectedPO.po_id);
+      notifyDashboardDataChanged("procurement:freight-quote-selected");
+      toast.success("Freight quote selected as winner");
+    } catch (error) {
+      toast.error("Failed to select winner", {
+        description: toErrorMessage(error),
+      });
+    }
+  }, [loadQuotes, selectedPO?.po_id]);
 
   useEffect(() => {
     loadTemplates();
   }, [loadTemplates]);
+
+  useEffect(() => {
+    if (!selectedPO?.po_id) {
+      setQuotes([]);
+      return;
+    }
+    void loadQuotes(selectedPO.po_id);
+  }, [loadQuotes, selectedPO?.po_id]);
+
+  const setSupplierField = <
+    K extends keyof SupplierFormState,
+  >(
+    key: K,
+    value: SupplierFormState[K],
+  ) => {
+    setSupplierForm((prev) => ({
+      ...prev,
+      [key]:
+        key === "currency_code" && typeof value === "string"
+          ? value.toUpperCase()
+          : key === "phone" && typeof value === "string"
+            ? sanitizePhoneInput(value)
+            : value,
+    }));
+    setSupplierFormErrors((prev) => {
+      if (!prev[key]) return prev;
+      return { ...prev, [key]: undefined };
+    });
+  };
+
+  const handleCreateSupplier = async () => {
+    const errors = validateSupplierForm(supplierForm);
+    setSupplierFormErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    setSavingSupplier(true);
+    try {
+      const existing = await fetchSupplierByName(
+        supplierForm.supplier_name.trim(),
+      );
+      if (existing) {
+        setSupplierName(existing.supplier_name);
+        setSelectedSupplierId(existing.id);
+        void fetchSupplierScorecard(existing.supplier_name);
+        setShowCreateSupplierDialog(false);
+        setSupplierForm(createEmptySupplierForm());
+        setSupplierFormErrors({});
+        toast.success("Supplier selected", {
+          description: `${existing.supplier_name} is now applied to the P.O. builder.`,
+        });
+        return;
+      }
+
+      const created = await createSupplierFromService({
+        supplier_name: supplierForm.supplier_name.trim(),
+        contact_person: supplierForm.contact_person.trim(),
+        email: supplierForm.email.trim(),
+        phone: supplierForm.phone.trim(),
+        address: supplierForm.address.trim(),
+        currency_code:
+          supplierForm.currency_code.trim().toUpperCase(),
+      });
+      await fetchSupplierOptions();
+      setSupplierName(created.supplier_name);
+      setSelectedSupplierId(created.id);
+      void fetchSupplierScorecard(created.supplier_name);
+      setShowCreateSupplierDialog(false);
+      setSupplierForm(createEmptySupplierForm());
+      setSupplierFormErrors({});
+      toast.success("Supplier created", {
+        description: `${created.supplier_name} is now ready for use in the P.O. builder.`,
+      });
+    } catch (error) {
+      toast.error("Failed to create supplier", {
+        description: toErrorMessage(error),
+      });
+    } finally {
+      setSavingSupplier(false);
+    }
+  };
 
   return (
     <div className="p-4 lg:p-8 space-y-8 bg-[#F8FAFC]">
@@ -1053,19 +1328,19 @@ export function InboundProcurement() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-        <Card className="bg-white border-[#111827]/10 shadow-sm h-fit self-start">
+        <Card className="bg-white border-[#111827]/10 shadow-sm h-fit self-start lg:max-h-[calc(100vh-11rem)] lg:flex lg:flex-col lg:overflow-hidden">
           <CardHeader>
             <CardTitle className="text-[#111827] font-semibold">
               Japan P.O. Management
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="min-h-0 lg:flex-1 lg:overflow-hidden">
             <Tabs
               value={activeTab}
               onValueChange={(v) =>
                 setActiveTab(v as TabFilter)
               }
-              className="w-full"
+              className="w-full lg:flex lg:min-h-0 lg:flex-1 lg:flex-col"
             >
               <TabsList className="grid w-full grid-cols-3 mb-4">
                 <TabsTrigger value="all">All</TabsTrigger>
@@ -1092,7 +1367,7 @@ export function InboundProcurement() {
                     <TabsContent
                       key={tab}
                       value={tab}
-                      className="space-y-3"
+                      className="space-y-3 lg:min-h-0 lg:flex-1 lg:overflow-hidden"
                     >
                       {loadingPOs ? (
                         <div className="text-sm text-[#6B7280] p-2">
@@ -1103,8 +1378,9 @@ export function InboundProcurement() {
                           No purchase orders found.
                         </div>
                       ) : (
-                        tabPOs.map((po) => (
-                          <div
+                        <div className="space-y-3 pb-1 lg:max-h-[calc(100vh-18rem)] lg:overflow-y-auto lg:pr-3 lg:pb-3 lg:scroll-smooth [scrollbar-gutter:stable]">
+                          {tabPOs.map((po) => (
+                            <div
                             key={po.po_id}
                             onClick={() => selectPO(po)}
                             className={`p-4 rounded-lg border-2 cursor-pointer transition-all hover:shadow-md ${
@@ -1157,8 +1433,9 @@ export function InboundProcurement() {
                                 View details &gt;
                               </Button>
                             </div>
-                          </div>
-                        ))
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </TabsContent>
                   );
@@ -1168,7 +1445,7 @@ export function InboundProcurement() {
           </CardContent>
         </Card>
 
-        <Card className="bg-white border-[#111827]/10 shadow-sm">
+        <Card id="po-builder-card" className="bg-white border-[#111827]/10 shadow-sm">
           <CardHeader>
             <CardTitle className="text-[#111827] font-semibold">
               P.O. Builder
@@ -1189,7 +1466,7 @@ export function InboundProcurement() {
                     className="bg-[#00A3AD] hover:bg-[#0891B2] text-white rounded-lg"
                     onClick={async () => {
                       try {
-                        setPoNo(await generateUniquePONumber());
+                        setPoNo(await fetchNextPurchaseOrderNumber());
                         toast.success("P.O. Number Generated");
                       } catch (error) {
                         toast.error(
@@ -1208,34 +1485,55 @@ export function InboundProcurement() {
 
               <div>
                 <Label>Supplier</Label>
-                <Input
-                  list="supplier-service-options"
+                <Select
                   value={supplierName}
-                  onChange={(e) => {
-                    const value = e.target.value;
+                  onValueChange={(value) => {
                     setSupplierName(value);
                     setSelectedSupplierId("");
                     void fetchSupplierScorecard(value);
                   }}
-                  placeholder="Enter supplier name..."
-                  className="mt-2 border-[#111827]/10 rounded-lg"
-                />
-                <datalist id="supplier-service-options">
+                >
+                  <SelectTrigger className={builderInputClass}>
+                    <SelectValue placeholder="Choose supplier..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {supplierOptions.length === 0 && (
+                      <SelectItem value="no-suppliers" disabled>
+                        No suppliers available
+                      </SelectItem>
+                    )}
                   {supplierOptions.map((option) => (
-                    <option key={option} value={option} />
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
                   ))}
-                </datalist>
+                  </SelectContent>
+                </Select>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <p className="text-xs text-[#6B7280]">
+                    Need a new supplier? Add it here and keep building the order.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowCreateSupplierDialog(true)}
+                    className="border-[#00A3AD]/40 text-[#00A3AD] hover:bg-[#00A3AD]/10"
+                  >
+                    Add Supplier
+                  </Button>
+                </div>
 
                 {false && supplierScorecard && (
                   <div
                     className={`text-sm mt-2 ${
-                      (supplierScorecard?.reliability_score ?? 0) < 70
+                      (supplierScorecard?.reliability_score ?? 100) < 70
                         ? "text-red-600"
                         : "text-green-600"
                     }`}
                   >
                     Supplier Scorecard — Reliability:{" "}
-                    {supplierScorecard?.reliability_score ?? 0}%
+                    {supplierScorecard?.reliability_score ?? 100}%
                   </div>
                 )}
 
@@ -1269,6 +1567,7 @@ export function InboundProcurement() {
                     </div>
                   </div>
                 )}
+
                 {selectedSupplierId && (
                   <div className="mt-2 text-xs text-[#6B7280]">
                     Supplier service ID: {selectedSupplierId}
@@ -1285,7 +1584,7 @@ export function InboundProcurement() {
                     onChange={(e) =>
                       setExpectedDeliveryDate(e.target.value)
                     }
-                    className="border-[#111827]/10 rounded-lg pr-10 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:right-0 [&::-webkit-calendar-picker-indicator]:w-10 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                    className={`${builderInputClass} pr-10 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:right-0 [&::-webkit-calendar-picker-indicator]:w-10 [&::-webkit-calendar-picker-indicator]:cursor-pointer`}
                   />
                   <Calendar className="w-4 h-4 text-[#6B7280] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
@@ -1297,7 +1596,7 @@ export function InboundProcurement() {
                   value={preferredCommunication}
                   onValueChange={setPreferredCommunication}
                 >
-                  <SelectTrigger className="mt-2 border-[#111827]/10 rounded-lg">
+                  <SelectTrigger className={builderInputClass}>
                     <SelectValue placeholder="Choose communication method..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -1329,7 +1628,7 @@ export function InboundProcurement() {
                   value={templateName}
                   onChange={(e) => setTemplateName(e.target.value)}
                   placeholder="e.g., Monthly JP Restock"
-                  className="border-[#111827]/10 rounded-lg"
+                  className={builderInputClass.replace("mt-2 ", "")}
                 />
                 <Button
                   variant="outline"
@@ -1342,34 +1641,40 @@ export function InboundProcurement() {
 
               <div className="rounded-lg border border-[#E5E7EB] p-3 bg-[#F8FAFC] space-y-3">
                 <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-[#111827]">
-                      Bulk import via CSV
-                    </Label>
-                    <p className="text-xs text-[#6B7280]">
-                      Uploads call the Supabase RPC
-                      bulk_import_po
-                    </p>
-                  </div>
+                  <Label className="text-[#111827]">
+                    Bulk import via CSV
+                  </Label>
                   {importingPO && (
                     <span className="text-xs text-[#00A3AD]">
                       Importing...
                     </span>
                   )}
                 </div>
-                <CSVUploader
-                  onParsed={(rows) => void openImportPreview(rows)}
-                  onError={(msg) =>
-                    toast.error("CSV parse failed", {
-                      description: msg,
-                    })
-                  }
-                />
-                <p className="text-xs text-[#6B7280]">
-                  Required columns: sku, qty. We will
-                  auto-generate the P.O. number if blank and
-                  create items in one call.
-                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowBulkImport((prev) => !prev)}
+                  className="border-[#111827]/20 text-[#111827] hover:bg-[#F8FAFC]"
+                >
+                  {showBulkImport ? "Hide CSV Upload" : "Show CSV Upload"}
+                </Button>
+                {showBulkImport && (
+                  <>
+                    <CSVUploader
+                      onParsed={(rows) => void openImportPreview(rows)}
+                      onError={(msg) =>
+                        toast.error("CSV parse failed", {
+                          description: msg,
+                        })
+                      }
+                    />
+                    <p className="text-xs text-[#6B7280]">
+                      Required columns: sku, qty. We will
+                      auto-generate the P.O. number if blank and
+                      create items in one call.
+                    </p>
+                  </>
+                )}
               </div>
 
               {selectedPO && (
@@ -1508,7 +1813,7 @@ export function InboundProcurement() {
                                   editingPoItemId:
                                     item.po_item_id,
                                   product: item.item_name ?? "",
-                                  qty: item.quantity ?? 1,
+                                  qty: String(item.quantity ?? ""),
                                 },
                               ];
                             });
@@ -1544,7 +1849,7 @@ export function InboundProcurement() {
                             formId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
                             editingPoItemId: null,
                             product: "",
-                            qty: 1,
+                            qty: "",
                           },
                         ])
                       }
@@ -1564,9 +1869,16 @@ export function InboundProcurement() {
                             ? "Edit Quantity"
                             : "New Line Item"}
                         </Label>
-                        <Select
-                          value={form.product || undefined}
-                          onValueChange={(value) =>
+                        <SearchableProductSelect
+                          options={products
+                            .map((p) => ({
+                              sku: buildProductLabel(p),
+                              name: buildProductLabel(p),
+                            }))
+                            .filter((o) => !!o.sku)
+                          }
+                          value={form.product || ""}
+                          onChange={(value) =>
                             setLineItemForms((prev) =>
                               prev.map((f) =>
                                 f.formId === form.formId
@@ -1576,30 +1888,15 @@ export function InboundProcurement() {
                             )
                           }
                           disabled={!!form.editingPoItemId}
-                        >
-                          <SelectTrigger className="border-[#111827]/10 rounded-lg">
-                            <SelectValue placeholder="Select product from master..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {products.map((product, idx) => {
-                              const label =
-                                buildProductLabel(product);
-                              if (!label) return null;
-                              return (
-                                <SelectItem
-                                  key={`${label}-${idx}`}
-                                  value={label}
-                                >
-                                  {label}
-                                </SelectItem>
-                              );
-                            })}
-                          </SelectContent>
-                        </Select>
+                          placeholder="Type or select product..."
+                        />
 
                         <Input
                           type="number"
-                          min={1}
+                          min="1"
+                          step="1"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
                           value={form.qty}
                           onChange={(e) =>
                             setLineItemForms((prev) =>
@@ -1607,7 +1904,7 @@ export function InboundProcurement() {
                                 f.formId === form.formId
                                   ? {
                                       ...f,
-                                      qty: Number(
+                                      qty: sanitizeIntegerInput(
                                         e.target.value,
                                       ),
                                     }
@@ -1615,7 +1912,10 @@ export function InboundProcurement() {
                               ),
                             )
                           }
-                          className="border-[#111827]/10 rounded-lg"
+                          onKeyDown={(e) =>
+                            blockInvalidNumberKeys(e)
+                          }
+                          className={builderInputClass.replace("mt-2 ", "")}
                           placeholder="Quantity"
                         />
 
@@ -1646,7 +1946,15 @@ export function InboundProcurement() {
 
                   <Button
                     variant="outline"
-                    onClick={() => setShowQuotes(true)}
+                    onClick={() => {
+                      if (!selectedPO?.po_id) {
+                        toast.error("Save the draft first", {
+                          description: "A purchase order record is required before managing freight quotes.",
+                        });
+                        return;
+                      }
+                      setShowQuotes(true);
+                    }}
                     className="w-full border-[#111827]/20 text-[#111827]"
                   >
                     Manage Freight Quotes
@@ -1680,6 +1988,260 @@ export function InboundProcurement() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog
+        open={showCreateSupplierDialog}
+        onOpenChange={(open) => {
+          setShowCreateSupplierDialog(open);
+          if (!open) {
+            setSupplierFormErrors({});
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Supplier Details</DialogTitle>
+            <DialogDescription>
+              Choose a supplier from the approved list and review its details.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="supplier-name">Supplier Name</Label>
+              <Select
+                value={supplierForm.supplier_name}
+                onValueChange={(value) => {
+                  setSupplierField("supplier_name", value);
+                  const selectedSupplier = supplierRecords.find(
+                    (supplier) => supplier.supplier_name === value,
+                  );
+                  if (!selectedSupplier) return;
+                  setSupplierForm((prev) => ({
+                    ...prev,
+                    supplier_name: selectedSupplier.supplier_name ?? value,
+                    contact_person: selectedSupplier.contact_person ?? "",
+                    email: selectedSupplier.email ?? "",
+                    phone: selectedSupplier.phone ?? "",
+                    address: selectedSupplier.address ?? "",
+                    currency_code: CURRENCY_OPTIONS.includes(
+                      (selectedSupplier.currency_code ?? "").toUpperCase() as (typeof CURRENCY_OPTIONS)[number],
+                    )
+                      ? (selectedSupplier.currency_code ?? "").toUpperCase()
+                      : "",
+                  }));
+                }}
+              >
+                <SelectTrigger
+                  id="supplier-name"
+                  className={builderInputClass.replace("mt-2 ", "")}
+                  aria-invalid={!!supplierFormErrors.supplier_name}
+                >
+                  <SelectValue placeholder="Choose supplier" />
+                </SelectTrigger>
+                <SelectContent>
+                  {supplierOptions.length === 0 && (
+                    <SelectItem value="no-suppliers" disabled>
+                      No suppliers available
+                    </SelectItem>
+                  )}
+                  {supplierOptions.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {supplierFormErrors.supplier_name && (
+                <p className="text-xs text-[#DC2626]">
+                  {supplierFormErrors.supplier_name}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="contact-person">Contact Person</Label>
+              <Input
+                id="contact-person"
+                value={supplierForm.contact_person}
+                onChange={(e) =>
+                  setSupplierField("contact_person", e.target.value)
+                }
+                className={builderInputClass.replace("mt-2 ", "")}
+                aria-invalid={!!supplierFormErrors.contact_person}
+              />
+              {supplierFormErrors.contact_person && (
+                <p className="text-xs text-[#DC2626]">
+                  {supplierFormErrors.contact_person}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="supplier-email">Email</Label>
+              <Input
+                id="supplier-email"
+                type="email"
+                value={supplierForm.email}
+                onChange={(e) =>
+                  setSupplierField("email", e.target.value)
+                }
+                className={builderInputClass.replace("mt-2 ", "")}
+                aria-invalid={!!supplierFormErrors.email}
+              />
+              {supplierFormErrors.email && (
+                <p className="text-xs text-[#DC2626]">
+                  {supplierFormErrors.email}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="supplier-phone">Phone</Label>
+              <Input
+                id="supplier-phone"
+                value={supplierForm.phone}
+                onChange={(e) =>
+                  setSupplierField("phone", e.target.value)
+                }
+                inputMode="numeric"
+                maxLength={10}
+                className={builderInputClass.replace("mt-2 ", "")}
+                aria-invalid={!!supplierFormErrors.phone}
+              />
+              {supplierFormErrors.phone && (
+                <p className="text-xs text-[#DC2626]">
+                  {supplierFormErrors.phone}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="supplier-address">Address</Label>
+              <Input
+                id="supplier-address"
+                value={supplierForm.address}
+                onChange={(e) =>
+                  setSupplierField("address", e.target.value)
+                }
+                className={builderInputClass.replace("mt-2 ", "")}
+                aria-invalid={!!supplierFormErrors.address}
+              />
+              {supplierFormErrors.address && (
+                <p className="text-xs text-[#DC2626]">
+                  {supplierFormErrors.address}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="supplier-currency">Currency Code</Label>
+              <Select
+                value={supplierForm.currency_code}
+                onValueChange={(value) =>
+                  setSupplierField("currency_code", value)
+                }
+              >
+                <SelectTrigger
+                  id="supplier-currency"
+                  className={builderInputClass.replace("mt-2 ", "")}
+                  aria-invalid={!!supplierFormErrors.currency_code}
+                >
+                  <SelectValue placeholder="Choose currency" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CURRENCY_OPTIONS.map((currency) => (
+                    <SelectItem key={currency} value={currency}>
+                      {currency}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {supplierFormErrors.currency_code && (
+                <p className="text-xs text-[#DC2626]">
+                  {supplierFormErrors.currency_code}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowCreateSupplierDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void handleCreateSupplier()}
+              disabled={
+                savingSupplier ||
+                Object.keys(validateSupplierForm(supplierForm)).length > 0
+              }
+              className="bg-[#00A3AD] hover:bg-[#0891B2] text-white"
+            >
+              {savingSupplier ? "Saving..." : "Apply Supplier"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(bundleSuggestion)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBundleSuggestion(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Suggested item for this PO</DialogTitle>
+            <DialogDescription className="text-[#6B7280]">
+              {bundleSuggestion
+                ? `${bundleSuggestion.recommendedProduct.split(" - ")[1] || bundleSuggestion.recommendedProduct} is often included when ${bundleSuggestion.triggerProduct.split(" - ")[1] || bundleSuggestion.triggerProduct} is ordered.`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+
+          {bundleSuggestion ? (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-[#1A2B47]/10 bg-[#F8FAFC] p-4">
+                <p className="text-sm font-medium text-[#111827]">
+                  Would you like to add this item to the purchase order too?
+                </p>
+                <p className="mt-2 text-sm text-[#4B5563]">
+                  {bundleSuggestion.recommendedProduct}
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setBundleSuggestion(null)}
+                >
+                  Not now
+                </Button>
+                <Button
+                  type="button"
+                  className="bg-[#00A3AD] text-white hover:bg-[#00838B]"
+                  onClick={() => {
+                    addRecommendedItem(
+                      bundleSuggestion.recommendedProduct,
+                    );
+                    setBundleSuggestion(null);
+                  }}
+                >
+                  Add to PO
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showQuotes} onOpenChange={setShowQuotes}>
         <DialogContent className="max-w-3xl">
@@ -1715,6 +2277,20 @@ export function InboundProcurement() {
                   </TableCell>
                 </TableRow>
               ))}
+              {!loadingQuotes && quotes.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center text-[#6B7280]">
+                    No freight quotes yet.
+                  </TableCell>
+                </TableRow>
+              )}
+              {loadingQuotes && (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center text-[#6B7280]">
+                    Loading freight quotes...
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
 
@@ -1759,13 +2335,23 @@ export function InboundProcurement() {
                 type="number" 
                 min={0}
                 step="0.01"
+                inputMode="decimal"
                 placeholder="0.00" 
                 value={newQuote.cost} 
                 onChange={(e) => {
-                  const val = Number(e.target.value);
-                  if (val < 0) return;
-                  setNewQuote({ ...newQuote, cost: e.target.value });
+                  setNewQuote({
+                    ...newQuote,
+                    cost: sanitizeDecimalInput(
+                      e.target.value,
+                      2,
+                    ),
+                  });
                 }} 
+                onKeyDown={(e) =>
+                  blockInvalidNumberKeys(e, {
+                    allowDecimal: true,
+                  })
+                }
                 className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A3AD]"
               />
             </div>
@@ -1778,19 +2364,27 @@ export function InboundProcurement() {
                 type="number" 
                 min={0}
                 step="1"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 placeholder="0" 
                 value={newQuote.days} 
                 onChange={(e) => {
-                  const val = Number(e.target.value);
-                  if (val < 0) return;
-                  setNewQuote({ ...newQuote, days: e.target.value });
+                  setNewQuote({
+                    ...newQuote,
+                    days: sanitizeIntegerInput(
+                      e.target.value,
+                    ),
+                  });
                 }} 
+                onKeyDown={(e) =>
+                  blockInvalidNumberKeys(e)
+                }
                 className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A3AD]"
               />
             </div>
 
             <Button 
-              onClick={addQuote} 
+              onClick={() => void addQuote()} 
               className="bg-[#00A3AD] hover:bg-[#0891B2] text-white"
             >
               Add Quote

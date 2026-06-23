@@ -11,7 +11,11 @@ export const receiptApi = {
     receiptNumber?: string;
     items?: Array<{ name: string; quantity: number; price: number }>;
     vatable?: number;
+    vatExempt?: number;
     vatAmount?: number;
+    vatDeduction?: number;
+    discountAmount?: number;
+    discountType?: string;
     total?: number;
     splitPayments?: Array<{
       method: string;

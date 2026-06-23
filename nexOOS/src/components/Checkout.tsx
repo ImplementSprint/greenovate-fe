@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronLeft, MapPin, CreditCard, CheckCircle2, ShoppingBag, Truck, ShieldCheck, ArrowRight, X, Wallet, Banknote } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, MapPin, CreditCard, CheckCircle2, ShoppingBag, Truck, ShieldCheck, ArrowRight, X, Wallet, Banknote } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { Order } from '../types';
 import { fetchWithAuth } from '@/lib/auth-client';
@@ -19,14 +19,25 @@ import {
 import { normalizePhilippinePhone, PH_PHONE_MESSAGE } from '@/lib/phone';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { usePhilippineLocations } from '@/hooks/usePhilippineLocations';
+import { useOosSettings, isPastCutoff } from '@/hooks/useOosSettings';
+
+type ProductSuggestion = import('../types').Product;
+type ProductPayload = ProductSuggestion[] | { data?: ProductSuggestion[] };
 
 const formatDeliveryAddress = (info: {
   address: string;
   city: string;
   province?: string;
+  barangay?: string;
   postalCode?: string;
+  formattedAddress?: string;
 }) =>
-  [info.address, info.city, info.province, info.postalCode].filter(Boolean).join(', ');
+  info.formattedAddress ||
+  [info.address, info.barangay, info.city, info.province, info.postalCode]
+    .filter(Boolean)
+    .join(', ');
+
+type DeliveryMethod = 'claim_at_branch' | 'same_day' | 'scheduled';
 
 type DeliveryEstimate = {
   fee: number;
@@ -34,6 +45,9 @@ type DeliveryEstimate = {
   etaMaxMinutes: number;
   etaLabel: string;
   matchedLocation: string;
+  deliveryMethod?: DeliveryMethod;
+  branchName?: string;
+  distanceKm?: number;
 };
 
 type AppliedPromo = {
@@ -95,9 +109,9 @@ const getPromoInputClassName = (status: 'idle' | 'checking' | 'valid' | 'invalid
     return `w-full rounded-2xl border px-4 py-3 text-sm font-bold uppercase tracking-[0.16em] transition-all focus:outline-none ${stateClasses}`;
   };
 
-const getPaymentMethodLabel = (paymentMethod: string) => {
+const getPaymentMethodLabel = (paymentMethod: string, deliveryMethod?: string) => {
   if (paymentMethod === 'cod') {
-    return 'Cash on Delivery';
+    return deliveryMethod === 'claim_at_branch' ? 'Cash' : 'Cash on Delivery';
   }
 
   if (paymentMethod === 'gcash') {
@@ -123,55 +137,187 @@ const getPaymentMethodIcon = (paymentMethod: string) => {
   return <CreditCard className="w-5 h-5 text-blue-600" />;
 };
 
-const isPaymentStepIncomplete = ({
-  paymentMethod,
-  gcashInfo,
-  mayaInfo,
-  cardInfo,
-}: {
-  paymentMethod: string;
-  gcashInfo: { number: string; reference: string };
-  mayaInfo: { number: string; reference: string };
-  cardInfo: { number: string; name: string; expiry: string; cvv: string };
-}) => {
-  if (paymentMethod === 'gcash') {
-    return !gcashInfo.number || !gcashInfo.reference;
+const getPayloadProducts = (payload: ProductPayload) =>
+  (Array.isArray(payload) ? payload : payload?.data ?? []) as ProductSuggestion[];
+
+const fetchProductPayload = async (url: string): Promise<ProductPayload> =>
+  fetch(url)
+    .then((response) => (response.ok ? response.json() : { data: [] }))
+    .catch(() => ({ data: [] }));
+
+const mergeSuggestions = (payloads: ProductPayload[], cartIds: Set<string>) => {
+  const seen = new Set<string>();
+  const merged: ProductSuggestion[] = [];
+
+  for (const payload of payloads) {
+    for (const product of getPayloadProducts(payload)) {
+      if (cartIds.has(product.id) || seen.has(product.id)) continue;
+      seen.add(product.id);
+      merged.push(product);
+    }
   }
 
-  if (paymentMethod === 'maya') {
-    return !mayaInfo.number || !mayaInfo.reference;
-  }
-
-  if (paymentMethod === 'card') {
-    return !cardInfo.number || !cardInfo.name || !cardInfo.expiry || !cardInfo.cvv;
-  }
-
-  return false;
+  return merged;
 };
+
+const getCartCategories = (cart: Order['items']) =>
+  [...new Set(cart.map((item) => item.category).filter(Boolean))];
+
+const buildFallbackQuery = (category?: string) =>
+  category ? `category=${encodeURIComponent(category)}&limit=15` : 'limit=15';
+
+const fetchCategoryFallbackPayloads = async (categories: string[]) => {
+  const [firstCategory, ...otherCategories] = categories;
+  const basePayload = await fetchProductPayload(`/api/products?${buildFallbackQuery(firstCategory)}`);
+  const extraPayloads = await Promise.all(
+    otherCategories.map((category) =>
+      fetchProductPayload(`/api/products?category=${encodeURIComponent(category)}&limit=15`),
+    ),
+  );
+
+  return [basePayload, ...extraPayloads];
+};
+
 
 const getDiscountTextClass = (discountAmount: number) => (discountAmount > 0 ? 'text-blue-600' : '');
 
+const getDeliveryMethodCopy = (method: DeliveryMethod) => {
+  if (method === 'claim_at_branch') {
+    return {
+      title: 'Claim at branch',
+      description: 'Pick up your order from the branch you selected.',
+    };
+  }
+
+  if (method === 'same_day') {
+    return {
+      title: 'Same day delivery',
+      description: 'Available for Metro Manila cities and priced from your selected branch to the selected city.',
+    };
+  }
+
+  return {
+    title: 'Scheduled delivery',
+    description: 'Best for addresses outside Metro Manila.',
+  };
+};
+
+const getCheckoutPaymentMethods = (deliveryMethod: DeliveryMethod) => [
+  { id: 'card', name: 'Credit / Debit Card', desc: 'Pay securely with card', icon: <CreditCard className="w-5 h-5 text-slate-500" /> },
+  {
+    id: 'cod',
+    name: deliveryMethod === 'claim_at_branch' ? 'Cash' : 'Cash on Delivery',
+    desc: deliveryMethod === 'claim_at_branch' ? 'Pay at the branch' : 'Pay when you receive',
+    icon: <Banknote className="w-5 h-5 text-slate-500" />,
+  },
+  { id: 'gcash', name: 'GCash', desc: 'Pay via GCash', icon: <Wallet className="w-5 h-5 text-blue-600" /> },
+  { id: 'maya', name: 'Maya', desc: 'Pay via Maya', icon: <Wallet className="w-5 h-5 text-blue-600" /> },
+];
+
+const getEffectiveCart = (cart: Order['items'], checkoutItemIds: string[] | null) =>
+  checkoutItemIds
+    ? cart.filter((item) => checkoutItemIds.includes(item.id))
+    : cart;
+
+const getDeliveryFee = (
+  deliveryMethod: DeliveryMethod,
+  effectiveCartTotal: number,
+  estimateFee: number | undefined,
+  freeDeliveryMin: number,
+  defaultDeliveryFee: number,
+) => {
+  if (deliveryMethod === 'claim_at_branch') {
+    return 0;
+  }
+
+  return effectiveCartTotal >= freeDeliveryMin ? 0 : estimateFee ?? defaultDeliveryFee;
+};
+
+const getSavedAddressInstruction = (deliveryMethod: DeliveryMethod, savedAddressPrompt: string) =>
+  deliveryMethod === 'claim_at_branch'
+    ? 'Pickup is free. You can still save an address for contact details and future deliveries.'
+    : savedAddressPrompt;
+
+const getEstimateLoadingCopy = (deliveryMethod: DeliveryMethod) =>
+  deliveryMethod === 'claim_at_branch'
+    ? 'Preparing free pickup details...'
+    : 'Checking delivery fee for this address...';
+
+const getCheckoutDestinationTitle = (deliveryMethod: DeliveryMethod) =>
+  deliveryMethod === 'claim_at_branch' ? 'Pickup Contact' : 'Shipping To';
+
+const getCheckoutDestinationLine = (
+  deliveryMethod: DeliveryMethod,
+  selectedBranch: { name: string; address: string } | null | undefined,
+  shippingInfo: Parameters<typeof formatDeliveryAddress>[0],
+) =>
+  deliveryMethod === 'claim_at_branch' && selectedBranch
+    ? `${selectedBranch.name}, ${selectedBranch.address}`
+    : formatDeliveryAddress(shippingInfo);
+
+const getDeliverySummaryCopy = (
+  deliveryMethod: DeliveryMethod,
+  selectedBranch: { name: string } | null | undefined,
+  etaLabel?: string,
+) => {
+  if (deliveryMethod === 'claim_at_branch') {
+    return selectedBranch
+      ? `Pickup branch: ${selectedBranch.name}`
+      : 'Preparing pickup details';
+  }
+
+  return `Delivering from ${selectedBranch?.name ?? 'selected branch'}. Estimated time: ${etaLabel || 'Waiting for address'}`;
+};
+
+const getPlaceOrderButtonLabel = (isPlacingOrder: boolean, isOnlinePayment: boolean, orderTotal: number) => {
+  if (isPlacingOrder) {
+    return isOnlinePayment ? 'Redirecting to payment…' : 'Placing Order…';
+  }
+
+  return isOnlinePayment
+    ? `Pay ₱${orderTotal.toFixed(2)} Online`
+    : `Place Order (₱${orderTotal.toFixed(2)})`;
+};
+
 export default function Checkout() {
-  const { 
+  const {
     cart, setCart,
     cartTotal,
+    checkoutItemIds, setCheckoutItemIds,
     setView,
+    logout,
     setOrders,
-    setAccountSubView,
     selectedBranch,
     user,
-    setUser
+    setUser,
+    addToCart,
+    updateQuantity,
   } = useAppContext();
 
+  // Derive live from cart so quantity changes and removals reflect immediately
+  const effectiveCart = getEffectiveCart(cart, checkoutItemIds);
+  const effectiveCartTotal = effectiveCart.reduce((sum, i) => sum + i.price * i.quantity, 0);
+
   const [checkoutStep, setCheckoutStep] = useState(1);
+  const [suggestions, setSuggestions] = useState<import('../types').Product[]>([]);
+  const [addedSuggestion, setAddedSuggestion] = useState('');
+  const carouselRef = React.useRef<HTMLDivElement>(null);
+  const [canScrollSuggestionsLeft, setCanScrollSuggestionsLeft] = useState(false);
+  const [canScrollSuggestionsRight, setCanScrollSuggestionsRight] = useState(false);
   const [shippingInfo, setShippingInfo] = useState({
     fullName: '',
     phone: '',
     address: '',
     city: 'Manila',
     province: '',
+    barangay: '',
     postalCode: '',
+    formattedAddress: '',
+    placeId: '',
+    latitude: undefined as number | undefined,
+    longitude: undefined as number | undefined,
   });
+  const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>('same_day');
   const [shippingError, setShippingError] = useState('');
   const [deliveryEstimate, setDeliveryEstimate] = useState<DeliveryEstimate | null>(null);
   const [deliveryEstimateStatus, setDeliveryEstimateStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -181,20 +327,8 @@ export default function Checkout() {
   const [promoMessage, setPromoMessage] = useState('');
   const [appliedPromo, setAppliedPromo] = useState<AppliedPromo | null>(null);
   const [paymentMethod, setPaymentMethod] = useState('cod');
-  const [gcashInfo, setGcashInfo] = useState({
-    number: '',
-    reference: ''
-  });
-  const [mayaInfo, setMayaInfo] = useState({
-    number: '',
-    reference: ''
-  });
-  const [cardInfo, setCardInfo] = useState({
-    number: '',
-    name: '',
-    expiry: '',
-    cvv: ''
-  });
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const idempotencyKeyRef = useRef(crypto.randomUUID());
   const [selectedSavedAddressIndex, setSelectedSavedAddressIndex] = useState<number | null>(null);
   const [isAddressPickerOpen, setIsAddressPickerOpen] = useState(false);
   const [addressPickerView, setAddressPickerView] = useState<'list' | 'form'>('list');
@@ -214,22 +348,29 @@ export default function Checkout() {
     provincesStatus,
     citiesStatus,
   } = usePhilippineLocations(checkoutAddressForm.province, checkoutAddressForm.city);
-  const deliveryFee = deliveryEstimate?.fee ?? 0;
+  const { settings: oosSettings } = useOosSettings();
+  const MIN_ORDER_AMOUNT = oosSettings.min_order_amount;
+  const isFreeDelivery = deliveryMethod !== 'claim_at_branch' && effectiveCartTotal >= oosSettings.free_delivery_min;
+  const deliveryFee = getDeliveryFee(
+    deliveryMethod,
+    effectiveCartTotal,
+    deliveryEstimate?.fee,
+    oosSettings.free_delivery_min,
+    oosSettings.delivery_fee,
+  );
   const discountAmount = appliedPromo?.discountAmount ?? 0;
-  const orderTotal = Math.max(0, cartTotal + deliveryFee - discountAmount);
+  const orderTotal = Math.max(0, effectiveCartTotal + deliveryFee - discountAmount);
+  const isBelowMinOrder = effectiveCartTotal < MIN_ORDER_AMOUNT;
+  const isAboveMaxItems = effectiveCart.length > oosSettings.max_order_items;
+  const isPastOrderCutoff = isPastCutoff(oosSettings.order_cutoff_time);
   const savedAddressPrompt = getSavedAddressPrompt(savedAddresses.length);
   const emptySavedAddressTitle = getEmptySavedAddressTitle(savedAddresses.length);
   const emptySavedAddressMessage = getEmptySavedAddressMessage(savedAddresses.length);
   const addressPickerCopy = getAddressPickerCopy(addressPickerView);
   const savedAddressCountMessage = getSavedAddressCountMessage(savedAddresses.length);
   const promoInputClassName = getPromoInputClassName(promoStatus);
-  const paymentMethodLabel = getPaymentMethodLabel(paymentMethod);
-  const paymentStepIncomplete = isPaymentStepIncomplete({
-    paymentMethod,
-    gcashInfo,
-    mayaInfo,
-    cardInfo,
-  });
+  const paymentMethodLabel = getPaymentMethodLabel(paymentMethod, deliveryMethod);
+  const paymentMethods = getCheckoutPaymentMethods(deliveryMethod);
 
   const applySavedAddress = React.useCallback((address: SavedAddress) => {
     setShippingInfo({
@@ -238,7 +379,12 @@ export default function Checkout() {
       address: address.streetAddress || '',
       city: address.city || 'Manila',
       province: address.province || '',
+      barangay: address.barangay || '',
       postalCode: address.postalCode || '',
+      formattedAddress: address.formattedAddress || formatSavedAddress(address),
+      placeId: address.placeId || '',
+      latitude: address.latitude,
+      longitude: address.longitude,
     });
     setShippingError('');
   }, [user?.full_name, user?.phone]);
@@ -296,9 +442,76 @@ export default function Checkout() {
       address: '',
       city: 'Manila',
       province: '',
+      barangay: '',
       postalCode: '',
+      formattedAddress: '',
+      placeId: '',
+      latitude: undefined,
+      longitude: undefined,
     });
     setShippingError('');
+  };
+
+  // Fetch suggestions: try co-purchase recommendations for ALL cart items first,
+  // then fall back to all unique categories across the cart
+  React.useEffect(() => {
+    if (cart.length === 0) return;
+    const cartIds = new Set(cart.map((i) => i.id));
+
+    const fetchAll = async () => {
+      const recommendationPayloads = await Promise.all(
+        cart.map((item) =>
+          fetchProductPayload(`/api/products/${encodeURIComponent(item.id)}/recommendations?limit=15`),
+        ),
+      );
+
+      const merged = mergeSuggestions(recommendationPayloads, cartIds);
+      if (merged.length > 0) {
+        setSuggestions(merged);
+        return;
+      }
+
+      const categories = getCartCategories(cart);
+      const fallbackPayloads = await fetchCategoryFallbackPayloads(categories);
+      setSuggestions(mergeSuggestions(fallbackPayloads, cartIds));
+    };
+
+    fetchAll().catch(() => {});
+  }, [cart]);
+
+  const CARD_W = 176; // card width 160 + gap 16
+
+  React.useEffect(() => {
+    const el = carouselRef.current;
+    if (!el) return;
+
+    const updateArrowState = () => {
+      const maxScrollLeft = Math.max(0, el.scrollWidth - el.clientWidth);
+      setCanScrollSuggestionsLeft(el.scrollLeft > 8);
+      setCanScrollSuggestionsRight(el.scrollLeft < maxScrollLeft - 8);
+    };
+
+    el.style.scrollBehavior = 'auto';
+    el.scrollLeft = 0;
+    updateArrowState();
+
+    el.addEventListener('scroll', updateArrowState, { passive: true });
+    window.addEventListener('resize', updateArrowState);
+
+    return () => {
+      el.removeEventListener('scroll', updateArrowState);
+      window.removeEventListener('resize', updateArrowState);
+    };
+  }, [suggestions]);
+
+  const scrollCarousel = (direction: 'left' | 'right') => {
+    const el = carouselRef.current;
+    if (!el || suggestions.length === 0) return;
+    const step = Math.max(CARD_W * 2, Math.floor(el.clientWidth * 0.75));
+    el.scrollBy({
+      left: direction === 'right' ? step : -step,
+      behavior: 'smooth',
+    });
   };
 
   React.useEffect(() => {
@@ -331,7 +544,7 @@ export default function Checkout() {
     const city = shippingInfo.city.trim();
     const province = shippingInfo.province.trim();
 
-    if (!address || !city || !province) {
+    if (deliveryMethod !== 'claim_at_branch' && (!address || !city || !province)) {
       setDeliveryEstimate(null);
       setDeliveryEstimateStatus('idle');
       setDeliveryEstimateError('');
@@ -354,6 +567,12 @@ export default function Checkout() {
             address,
             city,
             province,
+            barangay: shippingInfo.barangay,
+            latitude: shippingInfo.latitude,
+            longitude: shippingInfo.longitude,
+            placeId: shippingInfo.placeId,
+            branchId: selectedBranch?.id,
+            deliveryMethod,
           }),
         });
 
@@ -388,7 +607,17 @@ export default function Checkout() {
       cancelled = true;
       globalThis.clearTimeout(timeoutId);
     };
-  }, [shippingInfo.address, shippingInfo.city, shippingInfo.province]);
+  }, [
+    deliveryMethod,
+    selectedBranch?.id,
+    shippingInfo.address,
+    shippingInfo.barangay,
+    shippingInfo.city,
+    shippingInfo.latitude,
+    shippingInfo.longitude,
+    shippingInfo.placeId,
+    shippingInfo.province,
+  ]);
 
   React.useEffect(() => {
     const trimmedCode = promoCodeInput.trim();
@@ -414,7 +643,7 @@ export default function Checkout() {
           },
           body: JSON.stringify({
             code: trimmedCode,
-            subtotal: cartTotal,
+            subtotal: effectiveCartTotal,
           }),
         });
 
@@ -450,32 +679,77 @@ export default function Checkout() {
       cancelled = true;
       globalThis.clearTimeout(timeoutId);
     };
-  }, [promoCodeInput, cartTotal]);
+  }, [promoCodeInput, effectiveCartTotal]);
+
+  const isOnlinePayment = paymentMethod === 'gcash' || paymentMethod === 'maya' || paymentMethod === 'card';
+
+  const buildOrderPayload = (shippingAddress: string, paymentMethodLabel: string) => ({
+    shippingAddress,
+    deliveryFee,
+    deliveryMethod,
+    branchId: selectedBranch?.id,
+    promoCode: appliedPromo?.code || '',
+    paymentMethod: paymentMethodLabel,
+    items: effectiveCart.map((item) => ({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      price: item.price,
+      quantity: item.quantity,
+    })),
+  });
 
   const handlePlaceOrder = async () => {
+    if (isPlacingOrder) return;
+    setIsPlacingOrder(true);
     try {
-      const paymentMethodLabel = getPaymentMethodLabel(paymentMethod);
+      const paymentMethodLabel = getPaymentMethodLabel(paymentMethod, deliveryMethod);
+      const shippingAddress = deliveryMethod === 'claim_at_branch' && selectedBranch
+        ? `Pickup at ${selectedBranch.name}, ${selectedBranch.address}`
+        : formatDeliveryAddress(shippingInfo);
 
-      const shippingAddress = formatDeliveryAddress(shippingInfo);
+      const orderPayload = buildOrderPayload(shippingAddress, paymentMethodLabel);
 
+      // ── Online payment (GCash / Maya / Card) ────────────────────────────────
+      if (isOnlinePayment) {
+        const res = await fetchWithAuth('/api/orders/payment/initiate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': idempotencyKeyRef.current,
+          },
+          body: JSON.stringify(orderPayload),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to initiate payment');
+        }
+
+        // Reset idempotency key so a retry gets a fresh key
+        idempotencyKeyRef.current = crypto.randomUUID();
+
+        // Clear ordered items synchronously before navigating away. The localStorage
+        // effect is async and won't flush before the page redirect, so we write directly.
+        const remainingItems = cart.filter(i => !effectiveCart.some(e => e.id === i.id));
+        setCart(remainingItems);
+        setCheckoutItemIds(null);
+        localStorage.setItem('cart', JSON.stringify(remainingItems));
+
+        // Redirect browser to PayMongo hosted checkout — page will navigate away
+        window.location.href = data.checkoutUrl;
+        return;
+      }
+
+      // ── Cash on Delivery ─────────────────────────────────────────────────────
       const res = await fetchWithAuth('/api/orders/place', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKeyRef.current,
         },
-        body: JSON.stringify({
-          shippingAddress,
-          deliveryFee,
-          promoCode: appliedPromo?.code || '',
-          paymentMethod: paymentMethodLabel,
-          items: cart.map((item) => ({
-            id: item.id,
-            name: item.name,
-            category: item.category,
-            price: item.price,
-            quantity: item.quantity,
-          })),
-        }),
+        body: JSON.stringify(orderPayload),
       });
 
       const data = await res.json();
@@ -486,11 +760,12 @@ export default function Checkout() {
 
       const newOrder: Order = {
         id: data.order.id,
+        receiptNumber: data.order.receiptNumber,
         orderNumber: data.order.orderNumber,
         txNo: data.order.txNo,
         date: data.order.date,
-        items: cart.map((item) => ({ ...item })),
-        subtotal: Number(data.order.subtotal ?? cartTotal),
+        items: effectiveCart.map((item) => ({ ...item })),
+        subtotal: Number(data.order.subtotal ?? effectiveCartTotal),
         deliveryFee: Number(data.order.deliveryFee ?? deliveryFee),
         discountAmount: Number(data.order.discountAmount ?? discountAmount),
         promoCode: data.order.promoCode || appliedPromo?.code,
@@ -501,12 +776,22 @@ export default function Checkout() {
       };
 
       setOrders((prev) => [newOrder, ...prev]);
-      setCart([]);
-      setAccountSubView('orders');
-      setView('account');
+      setCart(cart.filter(i => !effectiveCart.some(e => e.id === i.id)));
+      setCheckoutItemIds(null);
+      idempotencyKeyRef.current = crypto.randomUUID();
+      setView('success');
     } catch (error) {
       console.error('Place order failed:', error);
-      alert(error instanceof Error ? error.message : 'Failed to place order.');
+      const message = error instanceof Error ? error.message : 'Failed to place order.';
+      if (message === 'Unauthorized' || message === 'Invalid or expired token') {
+        alert('Your session has expired. Please log in again.');
+        logout();
+        setView('login');
+      } else {
+        alert(message);
+      }
+    } finally {
+      setIsPlacingOrder(false);
     }
   };
 
@@ -540,15 +825,23 @@ export default function Checkout() {
             <ChevronLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
             Back to Shop
           </button>
-          <div className="flex items-center gap-4">
-            {[1, 2, 3].map(step => (
+          <div className="flex items-center gap-3">
+            {[
+              { step: 1, label: 'Cart' },
+              { step: 2, label: 'Shipping' },
+              { step: 3, label: 'Payment' },
+              { step: 4, label: 'Review' },
+            ].map(({ step, label }) => (
               <div key={step} className="flex items-center gap-2">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black transition-all ${
-                  checkoutStep >= step ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'bg-slate-200 text-slate-400'
-                }`}>
-                  {step}
+                <div className="flex flex-col items-center gap-1">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black transition-all ${
+                    checkoutStep >= step ? 'bg-blue-600 text-white shadow-lg shadow-blue-100' : 'bg-slate-200 text-slate-400'
+                  }`}>
+                    {step}
+                  </div>
+                  <span className={`text-[10px] font-bold hidden sm:block ${checkoutStep >= step ? 'text-blue-600' : 'text-slate-400'}`}>{label}</span>
                 </div>
-                {step < 3 && <div className={`w-8 h-0.5 rounded-full ${checkoutStep > step ? 'bg-blue-600' : 'bg-slate-200'}`} />}
+                {step < 4 && <div className={`w-6 h-0.5 rounded-full mb-4 ${checkoutStep > step ? 'bg-blue-600' : 'bg-slate-200'}`} />}
               </div>
             ))}
           </div>
@@ -558,8 +851,117 @@ export default function Checkout() {
           {/* Main Content */}
           <div className="lg:col-span-2 space-y-8">
             <AnimatePresence mode="wait">
+
+              {/* ── NEW STEP 1: Order Summary ── */}
               {checkoutStep === 1 && (
-                <motion.div 
+                <motion.div
+                  key="step-summary"
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  className="space-y-6"
+                >
+                  {/* Cart items */}
+                  <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100">
+                    <h2 className="text-2xl font-black text-slate-900 tracking-tight mb-6">Your Cart</h2>
+                    <div className="space-y-4">
+                      {effectiveCart.map((item) => (
+                        <div key={item.id} className="flex items-center gap-4 p-4 rounded-2xl border border-slate-100 bg-slate-50">
+                          <img src={item.image} alt={item.name} className="w-16 h-16 rounded-xl object-cover shrink-0" referrerPolicy="no-referrer" />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-black text-slate-900 text-sm line-clamp-2">{item.name}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">{item.category}</p>
+                            <p className="font-black text-slate-900 mt-1">₱{(item.price * item.quantity).toFixed(2)}</p>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              onClick={() => updateQuantity(item.id, -1)}
+                              className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-100 font-bold transition-colors"
+                            >−</button>
+                            <span className="w-8 text-center font-black text-slate-900">{item.quantity}</span>
+                            <button
+                              onClick={() => updateQuantity(item.id, +1)}
+                              className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white hover:bg-blue-700 font-bold transition-colors"
+                            >+</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-6 pt-4 border-t border-slate-100 flex justify-between items-center">
+                      <span className="text-slate-500 font-medium">Subtotal</span>
+                      <span className="text-xl font-black text-slate-900">₱{effectiveCartTotal.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  {/* Suggestions carousel */}
+                  {suggestions.length > 0 && (
+                    <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100">
+                      <div className="flex items-center justify-between mb-1">
+                        <h3 className="text-lg font-black text-slate-900 tracking-tight">You Might Also Need</h3>
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs text-slate-400 font-medium">{suggestions.length} items</span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => scrollCarousel('left')}
+                              aria-label="Scroll suggestions left"
+                              disabled={!canScrollSuggestionsLeft}
+                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition-all hover:-translate-y-px hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:translate-y-0 disabled:cursor-not-allowed disabled:border-slate-100 disabled:text-slate-300 disabled:shadow-none disabled:hover:bg-white"
+                            >
+                              <ChevronLeft className="h-4 w-4 shrink-0" />
+                            </button>
+                            <button
+                              onClick={() => scrollCarousel('right')}
+                              aria-label="Scroll suggestions right"
+                              disabled={!canScrollSuggestionsRight}
+                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition-all hover:-translate-y-px hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:translate-y-0 disabled:cursor-not-allowed disabled:border-slate-100 disabled:text-slate-300 disabled:shadow-none disabled:hover:bg-white"
+                            >
+                              <ChevronRight className="h-4 w-4 shrink-0" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-sm text-slate-500 mb-5">Customers who bought your items also bought these.</p>
+                      <div ref={carouselRef} className="flex gap-3 overflow-x-auto pb-3 hide-scrollbar">
+                        {suggestions.map((product) => (
+                          <div key={product.id} className="shrink-0 w-40 border border-slate-100 rounded-2xl overflow-hidden bg-slate-50 flex flex-col">
+                            <img src={product.image} alt={product.name} className="w-full h-36 object-cover" referrerPolicy="no-referrer" />
+                            <div className="p-3 flex flex-col flex-1">
+                              <p className="text-xs font-bold text-slate-900 line-clamp-2 flex-1">{product.name}</p>
+                              <p className="text-xs font-black text-slate-700 mt-1">₱{product.price.toFixed(2)}</p>
+                              <button
+                                onClick={() => {
+                                  addToCart(product, { openCart: false });
+                                  setAddedSuggestion(product.id);
+                                  setTimeout(() => setAddedSuggestion(''), 1500);
+                                }}
+                                className={`mt-2 w-full py-1.5 rounded-xl text-xs font-black transition-colors ${
+                                  addedSuggestion === product.id
+                                    ? 'bg-green-500 text-white'
+                                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                                }`}
+                              >
+                                {addedSuggestion === product.id ? '✓ Added' : '+ Add'}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Continue button */}
+                  <button
+                    onClick={() => setCheckoutStep(2)}
+                    className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-lg hover:bg-blue-700 transition-colors shadow-lg shadow-blue-100"
+                  >
+                    Continue to Shipping →
+                  </button>
+                </motion.div>
+              )}
+
+              {/* ── STEP 2: Shipping (was step 1) ── */}
+              {checkoutStep === 2 && (
+                <motion.div
                   key="step1"
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -573,11 +975,55 @@ export default function Checkout() {
                     <h2 className="text-2xl font-black text-slate-900 tracking-tight">Shipping Information</h2>
                   </div>
                   
+                  <div className="mb-8 rounded-[2.25rem] border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/50 sm:p-6">
+                    <p className="text-sm font-black uppercase tracking-[0.22em] text-slate-400">Delivery Method</p>
+                    <div className="mt-5 grid gap-3 md:grid-cols-3">
+                      {([
+                        'claim_at_branch',
+                        'same_day',
+                        'scheduled',
+                      ] as const).map((method) => {
+                        const copy = getDeliveryMethodCopy(method);
+                        const isSelected = deliveryMethod === method;
+
+                        return (
+                          <button
+                            key={method}
+                            type="button"
+                            onClick={() => {
+                              setDeliveryMethod(method);
+                              setShippingError('');
+                            }}
+                            className={`rounded-[1.75rem] border p-4 text-left transition-all ${
+                              isSelected
+                                ? 'border-blue-500 bg-blue-50 shadow-lg shadow-blue-100'
+                                : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white'
+                            }`}
+                          >
+                            <p className="text-sm font-black uppercase tracking-[0.18em] text-slate-400">
+                              {method.replaceAll('_', ' ')}
+                            </p>
+                            <p className="mt-3 text-lg font-black text-slate-900">{copy.title}</p>
+                            <p className="mt-2 text-sm leading-6 text-slate-500">{copy.description}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {selectedBranch && (
+                      <p className="mt-4 text-sm font-medium text-slate-500">
+                        Fulfillment branch: <span className="font-black text-slate-900">{selectedBranch.name}</span>
+                      </p>
+                    )}
+                  </div>
+
                   <div className="mb-8 rounded-[2.25rem] border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-5 shadow-sm shadow-slate-200/60 sm:p-6">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                       <div>
                         <p className="text-sm font-black uppercase tracking-[0.22em] text-slate-400">Saved Addresses</p>
-                        <p className="mt-1 text-sm text-slate-500">{savedAddressPrompt}</p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {getSavedAddressInstruction(deliveryMethod, savedAddressPrompt)}
+                        </p>
                       </div>
                       <button
                         type="button"
@@ -630,20 +1076,41 @@ export default function Checkout() {
                     <p className="mt-4 text-sm font-bold text-red-600">{shippingError}</p>
                   )}
                   {deliveryEstimateStatus === 'loading' && (
-                    <p className="mt-4 text-sm font-bold text-slate-500">Checking delivery fee for this address...</p>
+                    <p className="mt-4 text-sm font-bold text-slate-500">
+                      {getEstimateLoadingCopy(deliveryMethod)}
+                    </p>
                   )}
                   {deliveryEstimateStatus === 'ready' && deliveryEstimate && (
                     <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
                       <p className="font-black">Delivery fee: ₱{deliveryEstimate.fee.toFixed(2)}</p>
                       <p className="mt-1 font-medium">ETA: {deliveryEstimate.etaLabel}</p>
                       <p className="mt-1 text-xs font-bold uppercase tracking-wider text-blue-600">Matched area: {deliveryEstimate.matchedLocation}</p>
+                      {typeof deliveryEstimate.distanceKm === 'number' && (
+                        <p className="mt-1 text-xs font-bold uppercase tracking-wider text-blue-600">
+                          Branch distance: {deliveryEstimate.distanceKm.toFixed(2)} km
+                        </p>
+                      )}
                     </div>
                   )}
                   {deliveryEstimateStatus === 'error' && deliveryEstimateError && (
                     <p className="mt-4 text-sm font-bold text-red-600">{deliveryEstimateError}</p>
                   )}
                    
-                  <button 
+                  {isBelowMinOrder && (
+                    <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
+                      Minimum order is ₱{MIN_ORDER_AMOUNT.toFixed(2)}. Add ₱{(MIN_ORDER_AMOUNT - cartTotal).toFixed(2)} more to continue.
+                    </div>
+                  )}
+
+                  <div className="flex gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutStep(1)}
+                    className="flex-1 mt-10 py-4 bg-slate-100 text-slate-700 rounded-2xl font-black text-lg hover:bg-slate-200 transition-all"
+                  >
+                    ← Back to Cart
+                  </button>
+                  <button
                     onClick={() => {
                       const normalizedPhone = normalizePhilippinePhone(shippingInfo.phone);
 
@@ -659,14 +1126,15 @@ export default function Checkout() {
 
                       setShippingInfo((prev) => ({ ...prev, phone: normalizedPhone }));
                       setShippingError('');
-                      setCheckoutStep(2);
+                      setCheckoutStep(3);
                     }}
-                    disabled={selectedSavedAddressIndex === null || !deliveryEstimate}
-                    className="w-full mt-10 py-4 bg-blue-600 text-white rounded-2xl font-black text-lg hover:bg-blue-700 transition-all shadow-xl shadow-blue-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 group"
+                    disabled={selectedSavedAddressIndex === null || !deliveryEstimate || isBelowMinOrder || !selectedBranch}
+                    className="flex-1 mt-10 py-4 bg-blue-600 text-white rounded-2xl font-black text-lg hover:bg-blue-700 transition-all shadow-xl shadow-blue-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 group"
                   >
                     Continue to Payment
                     <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </button>
+                  </div>
 
                   <AnimatePresence>
                     {isAddressPickerOpen && (
@@ -838,7 +1306,7 @@ export default function Checkout() {
                                         placeholder="Select province"
                                         className="w-full bg-transparent text-base font-semibold text-slate-800 outline-none placeholder:font-medium placeholder:text-slate-300 sm:text-lg"
                                       />
-                                      <span className={getPickerChevronClass(isProvincePickerOpen)}>▾</span>
+                                      <ChevronDown className={`${getPickerChevronClass(isProvincePickerOpen)} h-5 w-5 shrink-0`} />
                                     </button>
                                   </div>
 
@@ -856,8 +1324,14 @@ export default function Checkout() {
                                               ...prev,
                                               province,
                                               city: prev.province === province ? prev.city : '',
+                                              barangay: '',
+                                              formattedAddress: '',
+                                              placeId: '',
+                                              latitude: undefined,
+                                              longitude: undefined,
                                             }));
                                             setIsProvincePickerOpen(false);
+                                            setCheckoutAddressError('');
                                           }}
                                           className={`block w-full rounded-xl px-3 py-2 text-left font-medium transition-colors ${checkoutAddressForm.province === province ? 'bg-blue-50 text-blue-600' : 'hover:bg-slate-50'}`}
                                         >
@@ -887,7 +1361,7 @@ export default function Checkout() {
                                         placeholder="Select city"
                                         className="w-full bg-transparent text-base font-semibold text-slate-800 outline-none placeholder:font-medium placeholder:text-slate-300 sm:text-lg"
                                       />
-                                      <span className={getPickerChevronClass(isCityPickerOpen)}>▾</span>
+                                      <ChevronDown className={`${getPickerChevronClass(isCityPickerOpen)} h-5 w-5 shrink-0`} />
                                     </button>
                                   </div>
 
@@ -907,8 +1381,17 @@ export default function Checkout() {
                                           key={city}
                                           type="button"
                                           onClick={() => {
-                                            setCheckoutAddressForm((prev) => ({ ...prev, city }));
+                                            setCheckoutAddressForm((prev) => ({
+                                              ...prev,
+                                              city,
+                                              barangay: '',
+                                              formattedAddress: '',
+                                              placeId: '',
+                                              latitude: undefined,
+                                              longitude: undefined,
+                                            }));
                                             setIsCityPickerOpen(false);
+                                            setCheckoutAddressError('');
                                           }}
                                           className={`block w-full rounded-xl px-3 py-2 text-left font-medium transition-colors ${checkoutAddressForm.city === city ? 'bg-blue-50 text-blue-600' : 'hover:bg-slate-50'}`}
                                         >
@@ -937,9 +1420,21 @@ export default function Checkout() {
                                   id="checkout-address-street"
                                   rows={4}
                                   value={checkoutAddressForm.streetAddress}
-                                  onChange={(e) => setCheckoutAddressForm((prev) => ({ ...prev, streetAddress: e.target.value }))}
+                                  onChange={(e) =>
+                                    setCheckoutAddressForm((prev) => ({
+                                      ...prev,
+                                      streetAddress: e.target.value,
+                                      formattedAddress: '',
+                                      placeId: '',
+                                      latitude: undefined,
+                                      longitude: undefined,
+                                    }))
+                                  }
                                   className="w-full resize-none bg-transparent text-base font-semibold text-slate-800 outline-none sm:text-lg"
                                 />
+                                <p className="mt-3 text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
+                                  Street details are used as delivery notes. Same day pricing is based on your selected city and branch.
+                                </p>
                               </div>
 
                               <label htmlFor="checkout-address-default" className="mb-6 flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-slate-700 transition-colors hover:border-slate-300 hover:bg-white">
@@ -1058,9 +1553,9 @@ export default function Checkout() {
                 </motion.div>
               )}
 
-              {checkoutStep === 2 && (
-                <motion.div 
-                  key="step2"
+              {checkoutStep === 3 && (
+                <motion.div
+                  key="step3"
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: 20 }}
@@ -1072,12 +1567,7 @@ export default function Checkout() {
                   </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                    {[
-                      { id: 'card', name: 'Credit / Debit Card', desc: 'Pay securely with card', icon: <CreditCard className="w-5 h-5 text-slate-500" /> },
-                      { id: 'cod', name: 'Cash on Delivery', desc: 'Pay when you receive', icon: <Banknote className="w-5 h-5 text-slate-500" /> },
-                      { id: 'gcash', name: 'GCash', desc: 'Pay via GCash', icon: <Wallet className="w-5 h-5 text-blue-600" /> },
-                      { id: 'maya', name: 'Maya', desc: 'Pay via Maya', icon: <Wallet className="w-5 h-5 text-blue-600" /> }
-                    ].map(method => (
+                    {paymentMethods.map(method => (
                       <button
                         type="button"
                         key={method.id}
@@ -1104,100 +1594,15 @@ export default function Checkout() {
                     ))}
                   </div>
 
-                  {paymentMethod === 'card' && (
+                  {isOnlinePayment && (
                     <motion.div
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: 'auto' }}
-                      className="space-y-4 overflow-hidden mt-6"
+                      className="mt-6 overflow-hidden"
                     >
-                      <div>
-                        <label htmlFor="checkout-card-number" className="block text-sm font-bold text-slate-700 mb-1.5">Card Number *</label>
-                        <input 
-                          id="checkout-card-number"
-                          type="text"
-                          placeholder="0000 0000 0000 0000"
-                          value={cardInfo.number}
-                          onChange={(e) => setCardInfo({...cardInfo, number: e.target.value})}
-                          className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="checkout-cardholder-name" className="block text-sm font-bold text-slate-700 mb-1.5">Cardholder Name *</label>
-                        <input 
-                          id="checkout-cardholder-name"
-                          type="text"
-                          placeholder="JUAN DELA CRUZ"
-                          value={cardInfo.name}
-                          onChange={(e) => setCardInfo({...cardInfo, name: e.target.value})}
-                          className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label htmlFor="checkout-card-expiry" className="block text-sm font-bold text-slate-700 mb-1.5">Expiry Date *</label>
-                          <input 
-                            id="checkout-card-expiry"
-                            type="text"
-                            placeholder="MM/YY"
-                            value={cardInfo.expiry}
-                            onChange={(e) => setCardInfo({...cardInfo, expiry: e.target.value})}
-                            className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                          />
-                        </div>
-                        <div>
-                          <label htmlFor="checkout-card-cvv" className="block text-sm font-bold text-slate-700 mb-1.5">CVV *</label>
-                          <input 
-                            id="checkout-card-cvv"
-                            type="text"
-                            placeholder="123"
-                            value={cardInfo.cvv}
-                            onChange={(e) => setCardInfo({...cardInfo, cvv: e.target.value})}
-                            className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-
-                  {paymentMethod === 'gcash' && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      className="space-y-6 overflow-hidden mt-6"
-                    >
-                      <div className="bg-[#f4f8ff] border border-blue-200 p-5 rounded-xl text-sm text-[#1e3a8a]">
-                        <p className="font-bold mb-3 text-base">GCash Payment Instructions:</p>
-                        <ol className="space-y-2 list-decimal list-inside">
-                          <li>Send ₱{orderTotal.toFixed(2)} to GCash number: <span className="font-bold">0917-123-4567</span></li>
-                          <li>Account Name: <span className="font-bold">HealthPlus Pharmacy</span></li>
-                          <li>Enter your GCash number and reference number below</li>
-                        </ol>
-                      </div>
-
-                      <div className="space-y-4">
-                        <div>
-                          <label htmlFor="checkout-gcash-number" className="block text-sm font-bold text-slate-700 mb-1.5">Your GCash Number *</label>
-                          <input 
-                            id="checkout-gcash-number"
-                            type="text"
-                            placeholder="09XX-XXX-XXXX"
-                            value={gcashInfo.number}
-                            onChange={(e) => setGcashInfo({...gcashInfo, number: e.target.value})}
-                            className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                          />
-                        </div>
-                        <div>
-                          <label htmlFor="checkout-gcash-reference" className="block text-sm font-bold text-slate-700 mb-1.5">GCash Reference Number *</label>
-                          <input 
-                            id="checkout-gcash-reference"
-                            type="text"
-                            placeholder="Enter reference number"
-                            value={gcashInfo.reference}
-                            onChange={(e) => setGcashInfo({...gcashInfo, reference: e.target.value})}
-                            className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                          />
-                        </div>
-                      </div>
+                      <p className="text-sm text-slate-500 text-center">
+                        You will be redirected to a secure payment page to complete your payment.
+                      </p>
                     </motion.div>
                   )}
 
@@ -1206,53 +1611,19 @@ export default function Checkout() {
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: 'auto' }}
                       className="space-y-6 overflow-hidden mt-6"
-                    >
-                      <div className="bg-[#f0fdf4] border border-blue-200 p-5 rounded-xl text-sm text-[#064e3b]">
-                        <p className="font-bold mb-3 text-base">Maya Payment Instructions:</p>
-                        <ol className="space-y-2 list-decimal list-inside">
-                          <li>Send ₱{orderTotal.toFixed(2)} to Maya number: <span className="font-bold">0918-765-4321</span></li>
-                          <li>Account Name: <span className="font-bold">HealthPlus Pharmacy</span></li>
-                          <li>Enter your Maya number and reference number below</li>
-                        </ol>
-                      </div>
-
-                      <div className="space-y-4">
-                        <div>
-                          <label htmlFor="checkout-maya-number" className="block text-sm font-bold text-slate-700 mb-1.5">Your Maya Number *</label>
-                          <input 
-                            id="checkout-maya-number"
-                            type="text"
-                            placeholder="09XX-XXX-XXXX"
-                            value={mayaInfo.number}
-                            onChange={(e) => setMayaInfo({...mayaInfo, number: e.target.value})}
-                            className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                          />
-                        </div>
-                        <div>
-                          <label htmlFor="checkout-maya-reference" className="block text-sm font-bold text-slate-700 mb-1.5">Maya Reference Number *</label>
-                          <input 
-                            id="checkout-maya-reference"
-                            type="text"
-                            placeholder="Enter reference number"
-                            value={mayaInfo.reference}
-                            onChange={(e) => setMayaInfo({...mayaInfo, reference: e.target.value})}
-                            className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
+                    />
                   )}
                   
                   <div className="flex gap-4 mt-8">
                     <button 
-                      onClick={() => setCheckoutStep(1)}
+                      onClick={() => setCheckoutStep(2)}
                       className="flex-1 py-3.5 bg-slate-100 text-slate-700 rounded-xl font-bold text-base hover:bg-slate-200 transition-all"
                     >
                       Back
                     </button>
-                    <button 
-                      onClick={() => setCheckoutStep(3)}
-                      disabled={paymentStepIncomplete}
+                    <button
+                      onClick={() => setCheckoutStep(4)}
+                      disabled={false}
                       className="flex-[2] py-3.5 bg-blue-600 text-white rounded-xl font-bold text-base hover:bg-blue-700 transition-all shadow-md shadow-blue-200 flex items-center justify-center gap-2 group disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Review Order
@@ -1262,9 +1633,9 @@ export default function Checkout() {
                 </motion.div>
               )}
 
-              {checkoutStep === 3 && (
-                <motion.div 
-                  key="step3"
+              {checkoutStep === 4 && (
+                <motion.div
+                  key="step4"
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: 20 }}
@@ -1280,10 +1651,14 @@ export default function Checkout() {
                   <div className="space-y-8">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                       <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
-                        <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Shipping To</h3>
+                        <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-4">
+                          {getCheckoutDestinationTitle(deliveryMethod)}
+                        </h3>
                         <p className="font-black text-slate-900 mb-1">{shippingInfo.fullName}</p>
                         <p className="text-sm text-slate-600 mb-1">{shippingInfo.phone}</p>
-                        <p className="text-sm text-slate-600 leading-relaxed">{formatDeliveryAddress(shippingInfo) || 'Address will be confirmed during checkout.'}</p>
+                        <p className="text-sm text-slate-600 leading-relaxed">
+                          {getCheckoutDestinationLine(deliveryMethod, selectedBranch, shippingInfo) || 'Address will be confirmed during checkout.'}
+                        </p>
                       </div>
                       <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
                         <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Payment Method</h3>
@@ -1295,12 +1670,20 @@ export default function Checkout() {
                         </div>
                       </div>
                     </div>
+                    <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
+                      <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Delivery Method</h3>
+                      <p className="font-black text-slate-900">{getDeliveryMethodCopy(deliveryMethod).title}</p>
+                      <p className="mt-2 text-sm text-slate-600">{getDeliveryMethodCopy(deliveryMethod).description}</p>
+                    </div>
                     {deliveryEstimate && (
                       <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
                         <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Delivery Estimate</h3>
                         <p className="font-black text-slate-900 mb-1">₱{deliveryEstimate.fee.toFixed(2)}</p>
                         <p className="text-sm text-slate-600 mb-1">ETA: {deliveryEstimate.etaLabel}</p>
                         <p className="text-sm text-slate-600">{deliveryEstimate.matchedLocation}</p>
+                        {typeof deliveryEstimate.distanceKm === 'number' && (
+                          <p className="text-sm text-slate-600 mt-1">Branch distance: {deliveryEstimate.distanceKm.toFixed(2)} km</p>
+                        )}
                       </div>
                     )}
                     <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
@@ -1331,7 +1714,7 @@ export default function Checkout() {
                     <div>
                       <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Order Summary</h3>
                       <div className="space-y-4">
-                        {cart.map(item => (
+                        {effectiveCart.map(item => (
                           <div key={item.id} className="flex items-center gap-4 bg-white p-3 rounded-2xl border border-slate-100">
                             <img src={item.image} alt={item.name} className="w-16 h-16 object-cover rounded-xl" referrerPolicy="no-referrer" />
                             <div className="flex-1">
@@ -1347,16 +1730,17 @@ export default function Checkout() {
                   
                   <div className="flex gap-4 mt-10">
                     <button 
-                      onClick={() => setCheckoutStep(2)}
+                      onClick={() => setCheckoutStep(3)}
                       className="flex-1 py-4 bg-slate-100 text-slate-700 rounded-2xl font-black text-lg hover:bg-slate-200 transition-all"
                     >
                       Back
                     </button>
-                    <button 
+                    <button
                       onClick={handlePlaceOrder}
-                      className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-black text-lg hover:bg-blue-700 transition-all shadow-xl shadow-blue-100"
+                      disabled={isPlacingOrder || isBelowMinOrder || isAboveMaxItems}
+                      className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-black text-lg hover:bg-blue-700 transition-all shadow-xl shadow-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Place Order (₱{orderTotal.toFixed(2)})
+                      {getPlaceOrderButtonLabel(isPlacingOrder, isOnlinePayment, orderTotal)}
                     </button>
                   </div>
                 </motion.div>
@@ -1415,6 +1799,35 @@ export default function Checkout() {
                 </div>
               </div>
               
+              {/* Notices */}
+              <div className="space-y-2 mb-4">
+                {isBelowMinOrder && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+                    ⚠️ Minimum order is ₱{MIN_ORDER_AMOUNT.toFixed(2)} — add ₱{(MIN_ORDER_AMOUNT - cartTotal).toFixed(2)} more to continue.
+                  </div>
+                )}
+                {isAboveMaxItems && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-bold text-red-700">
+                    ⚠️ Max {oosSettings.max_order_items} different products per order. Please remove {effectiveCart.length - oosSettings.max_order_items} item type(s).
+                  </div>
+                )}
+                {isPastOrderCutoff && (
+                  <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-700">
+                    🕒 Order cutoff is {oosSettings.order_cutoff_time}. Your order will be queued for tomorrow.
+                  </div>
+                )}
+                {isFreeDelivery && (
+                  <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-xs font-bold text-green-700">
+                    🎉 Your order qualifies for <span className="font-black">free delivery!</span>
+                  </div>
+                )}
+                {!isFreeDelivery && deliveryMethod !== 'claim_at_branch' && oosSettings.free_delivery_min > cartTotal && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                    Add <span className="font-black">₱{(oosSettings.free_delivery_min - cartTotal).toFixed(2)}</span> more for free delivery.
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-4">
                 <div className="flex items-center gap-3 text-xs text-slate-500 bg-slate-50 p-4 rounded-2xl">
                   <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0" />
@@ -1423,7 +1836,9 @@ export default function Checkout() {
                 {selectedBranch && (
                   <div className="flex items-center gap-3 text-xs text-slate-500 bg-blue-50 p-4 rounded-2xl">
                     <Truck className="w-5 h-5 text-blue-600 shrink-0" />
-                    <p className="font-medium leading-relaxed">Delivering from <span className="font-black text-blue-700">{selectedBranch.name}</span>. Estimated time: <span className="font-black text-blue-700">{deliveryEstimate?.etaLabel || 'Waiting for address'}</span>.</p>
+                    <p className="font-medium leading-relaxed">
+                      {getDeliverySummaryCopy(deliveryMethod, selectedBranch, deliveryEstimate?.etaLabel)}
+                    </p>
                   </div>
                 )}
               </div>

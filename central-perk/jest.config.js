@@ -1,22 +1,21 @@
-const nextJest = require('next/jest');
+import nextJest from "next/jest.js";
 
 const createJestConfig = nextJest({
-  dir: './',
+  dir: "./",
 });
 
 const customJestConfig = {
-  testEnvironment: 'jest-environment-jsdom',
-  roots: ['<rootDir>/tests', '<rootDir>/src'],
-  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
-  testPathIgnorePatterns: ['/node_modules/', '/.next/'],
-  modulePathIgnorePatterns: ['<rootDir>/.next/'],
+  testEnvironment: "jest-environment-jsdom",
+  roots: ["<rootDir>/tests/unit"],
+  setupFilesAfterEnv: ["<rootDir>/jest.setup.js"],
+  testPathIgnorePatterns: ["/node_modules/", "/.next/"],
+  modulePathIgnorePatterns: ["<rootDir>/.next/"],
   collectCoverage: true,
   collectCoverageFrom: [
-    '<rootDir>/src/**/*.{ts,tsx}',
-    '!<rootDir>/src/**/*.d.ts',
-    '!<rootDir>/src/app/**/*.{ts,tsx}',
+    "<rootDir>/src/lib/**/*.{ts,tsx}",
+    "!<rootDir>/src/**/*.d.ts",
   ],
-  coverageReporters: ['text', 'lcov', 'json-summary'],
+  coverageReporters: ["text", "lcov", "json-summary"],
   coverageThreshold: {
     global: {
       branches: 80,
@@ -27,4 +26,4 @@ const customJestConfig = {
   },
 };
 
-module.exports = createJestConfig(customJestConfig);
+export default createJestConfig(customJestConfig);

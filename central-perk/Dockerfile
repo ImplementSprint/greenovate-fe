@@ -1,27 +1,53 @@
-FROM node:24-alpine AS base
+# syntax=docker/dockerfile:1
+
+FROM node:22-alpine3.23 AS deps
 WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN apk upgrade --no-cache
 
-FROM base AS deps
-WORKDIR /app
-COPY package*.json ./
+COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+FROM deps AS builder
+
+ARG NEXT_PUBLIC_SUPABASE_URL=""
+ARG NEXT_PUBLIC_SUPABASE_PROJECT_ID=""
+ARG NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=""
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=""
+ARG NEXT_PUBLIC_ENABLE_DEMO_AUTH="true"
+ARG NEXT_PUBLIC_FORCE_CUSTOMER_DEMO_AUTH="false"
+ARG NEXT_PUBLIC_USE_SPLIT_SERVICE_DATABASES="true"
+ARG NEXT_PUBLIC_GATEWAY_URL="http://localhost:4000"
+
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_PROJECT_ID=$NEXT_PUBLIC_SUPABASE_PROJECT_ID
+ENV NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_ENABLE_DEMO_AUTH=$NEXT_PUBLIC_ENABLE_DEMO_AUTH
+ENV NEXT_PUBLIC_FORCE_CUSTOMER_DEMO_AUTH=$NEXT_PUBLIC_FORCE_CUSTOMER_DEMO_AUTH
+ENV NEXT_PUBLIC_USE_SPLIT_SERVICE_DATABASES=$NEXT_PUBLIC_USE_SPLIT_SERVICE_DATABASES
+ENV NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
+
 COPY . .
 RUN npm run build
 
-FROM base AS runner
+FROM node:22-alpine3.23 AS runner
 WORKDIR /app
+
+RUN apk upgrade --no-cache
+
 ENV NODE_ENV=production
-COPY package*.json ./
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+COPY package.json package-lock.json ./
 RUN npm ci --omit=dev \
-	&& npm cache clean --force \
-	&& rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+  && npm cache clean --force \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.ts ./next.config.ts
+
 EXPOSE 3000
-CMD ["node", "node_modules/next/dist/bin/next", "start", "-p", "3000"]
+CMD ["./node_modules/.bin/next", "start", "--hostname", "0.0.0.0", "--port", "3000"]

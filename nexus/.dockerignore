@@ -1,6 +1,11 @@
 node_modules
-build
+.next
+dist
 .git
 .gitignore
-*.md
-.vscode
+Dockerfile
+docker-compose.yml
+*.log
+.env
+.env.*
+coverage

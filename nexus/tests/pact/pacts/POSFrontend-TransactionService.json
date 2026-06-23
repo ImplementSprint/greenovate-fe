@@ -87,9 +87,7 @@
                 }
               ]
             }
-          },
-          "header": {},
-          "status": {}
+          }
         },
         "status": 201
       }
@@ -159,9 +157,7 @@
                 }
               ]
             }
-          },
-          "header": {},
-          "status": {}
+          }
         },
         "status": 201
       }
@@ -201,9 +197,7 @@
                 }
               ]
             }
-          },
-          "header": {},
-          "status": {}
+          }
         },
         "status": 400
       }
@@ -267,9 +261,7 @@
                 }
               ]
             }
-          },
-          "header": {},
-          "status": {}
+          }
         },
         "status": 200
       }
@@ -326,9 +318,7 @@
                 }
               ]
             }
-          },
-          "header": {},
-          "status": {}
+          }
         },
         "status": 201
       }
@@ -523,9 +513,7 @@
                 }
               ]
             }
-          },
-          "header": {},
-          "status": {}
+          }
         },
         "status": 200
       }
@@ -589,9 +577,7 @@
                 }
               ]
             }
-          },
-          "header": {},
-          "status": {}
+          }
         },
         "status": 200
       }
@@ -599,11 +585,11 @@
   ],
   "metadata": {
     "pact-js": {
-      "version": "13.2.0"
+      "version": "16.3.0"
     },
     "pactRust": {
-      "ffi": "0.4.22",
-      "models": "1.2.3"
+      "ffi": "0.5.3",
+      "models": "1.3.9"
     },
     "pactSpecification": {
       "version": "3.0.0"

@@ -25,7 +25,7 @@ export default function Success() {
         </div>
         
         <h2 className="text-4xl lg:text-5xl font-black text-slate-900 mb-4 tracking-tight">Order Placed!</h2>
-        <p className="text-xl text-slate-600 mb-10 leading-relaxed">Thank you for your purchase. Your order <span className="font-black text-blue-600">#{latestOrder?.id}</span> has been received and is being processed.</p>
+        <p className="text-xl text-slate-600 mb-10 leading-relaxed">Thank you for your purchase. Receipt <span className="font-black text-blue-600">{latestOrder?.receiptNumber ?? latestOrder?.id}</span> has been received and is being processed.</p>
         
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
           <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
