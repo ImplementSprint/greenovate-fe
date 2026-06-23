@@ -13,6 +13,7 @@ const customJestConfig = {
   coverageReporters: ['text', 'lcov', 'json-summary'],
   collectCoverageFrom: ['src/utils/vatCalculator.ts'],
   testPathIgnorePatterns: ['/node_modules/', '\\.spec\\.ts$'],
+  modulePathIgnorePatterns: ['<rootDir>/.next/'],
 };
 
 // createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async
