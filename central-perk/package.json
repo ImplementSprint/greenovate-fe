@@ -89,7 +89,7 @@
         "eslint": "^9.39.1",
         "eslint-config-next": "^15.5.18",
         "jest": "^30.3.0",
-        "jest-environment-jsdom": "^30.3.0",
+        "jest-environment-jsdom": "30.4.1",
         "pg": "^8.20.0",
         "playwright": "^1.58.2",
         "tailwindcss": "4.1.12",
@@ -97,7 +97,8 @@
         "typescript": "^5.9.3"
     },
     "overrides": {
-        "postcss": "8.5.15"
+        "postcss": "8.5.15",
+        "js-yaml": "4.2.0"
     },
     "description": "This is a code bundle for Design Log. The original project is available at https://www.figma.com/design/Gp9tJFj47Xx36LdY2RUXRA/Design-Log.",
     "main": "index.js",

@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 
-FROM node:22-slim AS deps
+FROM node:22-alpine3.23 AS deps
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+RUN apk upgrade --no-cache
 
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -30,12 +31,10 @@ ENV NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
 COPY . .
 RUN npm run build
 
-FROM node:22-slim AS runner
+FROM node:22-alpine3.23 AS runner
 WORKDIR /app
 
-RUN apt-get update \
-  && apt-get install --only-upgrade -y --no-install-recommends libgnutls30 \
-  && rm -rf /var/lib/apt/lists/*
+RUN apk upgrade --no-cache
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
