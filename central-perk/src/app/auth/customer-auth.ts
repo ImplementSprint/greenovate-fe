@@ -455,21 +455,22 @@ function loadDemoAccounts(): DemoAccount[] {
 }
 
 async function saveDemoAccounts(accounts: DemoAccount[]): Promise<void> {
-  const payload = JSON.stringify(accounts);
   if (
     typeof crypto !== "undefined" &&
     crypto.subtle &&
     hasDemoAccountsEncryptionSecret()
   ) {
     try {
+      const payload = JSON.stringify(accounts);
       const encryptedPayload = await encryptDemoAccountsPayload(payload);
       localStorage.setItem(DEMO_ACCOUNTS_KEY, encryptedPayload);
       return;
     } catch {
-      // Fall back to plaintext to avoid breaking demo flow.
+      // Do not persist sensitive data in plaintext when encryption fails.
     }
   }
-  localStorage.setItem(DEMO_ACCOUNTS_KEY, payload);
+  // Do not persist sensitive data when encryption is unavailable.
+  return;
 }
 
 async function hashSecret(secret: string): Promise<string> {
