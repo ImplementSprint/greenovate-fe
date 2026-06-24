@@ -17,6 +17,13 @@ import { DEMO_MEMBER_ID, DEMO_POINTS, DEMO_TIER, withDemoMemberData } from "../l
 const USER_STORAGE_KEY = "points-dashboard-user-v1";
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
+type StoredMemberData = Omit<MemberData, "birthdate" | "email" | "phone" | "address">;
+
+function toStoredUser(user: MemberData): StoredMemberData {
+  const { birthdate: _birthdate, email: _email, phone: _phone, address: _address, ...rest } = user;
+  return rest;
+}
+
 const DEFAULT_MEMBER: MemberData = {
   memberId: DEMO_MEMBER_ID,
   fullName: "Sarah Johnson",
@@ -55,7 +62,8 @@ function loadUser(): MemberData {
   try {
     const raw = localStorage.getItem(USER_STORAGE_KEY);
     if (!raw) return withDemoMemberData(DEFAULT_MEMBER);
-    return withDemoMemberData({ ...DEFAULT_MEMBER, ...JSON.parse(raw) } as MemberData);
+    const stored = JSON.parse(raw) as Partial<StoredMemberData>;
+    return withDemoMemberData({ ...DEFAULT_MEMBER, ...stored } as MemberData);
   } catch {
     return withDemoMemberData(DEFAULT_MEMBER);
   }
@@ -81,7 +89,7 @@ export default function Root() {
   ];
 
   useEffect(() => {
-    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(toStoredUser(user)));
     userRef.current = user;
   }, [user]);
 
