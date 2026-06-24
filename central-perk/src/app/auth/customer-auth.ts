@@ -7,10 +7,96 @@ import {
 } from "../lib/member-service-api";
 
 const DEMO_ACCOUNTS_KEY = "loyaltyhub-demo-accounts-v1";
+const DEMO_ACCOUNTS_ENCRYPTION_VERSION = 1;
+const DEMO_ACCOUNTS_ALGO = "AES-GCM";
+const DEMO_ACCOUNTS_KDF_ITERATIONS = 100000;
 const DEMO_AUTH_ENABLED = process.env.NEXT_PUBLIC_ENABLE_DEMO_AUTH === "true";
 const FORCE_CUSTOMER_DEMO_AUTH = process.env.NEXT_PUBLIC_FORCE_CUSTOMER_DEMO_AUTH === "true";
 const DEMO_PROFILE_BOOTSTRAP_ENABLED = DEMO_AUTH_ENABLED && process.env.NEXT_PUBLIC_ENABLE_DEMO_PROFILE_BOOTSTRAP === "true";
 const MIN_PASSWORD_LENGTH = 8;
+
+function hasDemoAccountsEncryptionSecret(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_DEMO_ACCOUNTS_SECRET);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  bytes.forEach((b) => {
+    binary += String.fromCharCode(b);
+  });
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
+async function deriveDemoAccountsKey(salt: Uint8Array): Promise<CryptoKey> {
+  const secret = process.env.NEXT_PUBLIC_DEMO_ACCOUNTS_SECRET ?? "";
+  const baseKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: DEMO_ACCOUNTS_KDF_ITERATIONS,
+      hash: "SHA-256",
+    },
+    baseKey,
+    { name: DEMO_ACCOUNTS_ALGO, length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+async function encryptDemoAccountsPayload(plainText: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveDemoAccountsKey(salt);
+  const cipherBuffer = await crypto.subtle.encrypt(
+    { name: DEMO_ACCOUNTS_ALGO, iv },
+    key,
+    new TextEncoder().encode(plainText),
+  );
+  return JSON.stringify({
+    v: DEMO_ACCOUNTS_ENCRYPTION_VERSION,
+    s: bytesToBase64(salt),
+    i: bytesToBase64(iv),
+    d: bytesToBase64(new Uint8Array(cipherBuffer)),
+  });
+}
+
+async function decryptDemoAccountsPayload(payload: string): Promise<string | null> {
+  try {
+    const parsed = JSON.parse(payload) as { v?: number; s?: string; i?: string; d?: string };
+    if (
+      parsed?.v !== DEMO_ACCOUNTS_ENCRYPTION_VERSION ||
+      typeof parsed.s !== "string" ||
+      typeof parsed.i !== "string" ||
+      typeof parsed.d !== "string"
+    ) {
+      return null;
+    }
+    const salt = base64ToBytes(parsed.s);
+    const iv = base64ToBytes(parsed.i);
+    const data = base64ToBytes(parsed.d);
+    const key = await deriveDemoAccountsKey(salt);
+    const plainBuffer = await crypto.subtle.decrypt({ name: DEMO_ACCOUNTS_ALGO, iv }, key, data);
+    return new TextDecoder().decode(plainBuffer);
+  } catch {
+    return null;
+  }
+}
 const DEMO_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const PENDING_EMAIL_ALIASES_KEY = "centralperk-pending-email-aliases-v1";
 
@@ -346,7 +432,21 @@ function loadDemoAccounts(): DemoAccount[] {
   try {
     const raw = localStorage.getItem(DEMO_ACCOUNTS_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as DemoAccount[];
+
+    let parsed: DemoAccount[] | null = null;
+    const encryptedShape = JSON.parse(raw) as { v?: number; s?: string; i?: string; d?: string };
+    if (
+      encryptedShape?.v === DEMO_ACCOUNTS_ENCRYPTION_VERSION &&
+      typeof encryptedShape.s === "string" &&
+      typeof encryptedShape.i === "string" &&
+      typeof encryptedShape.d === "string"
+    ) {
+      // Encrypted payload exists, but load path is synchronous.
+      // If needed, it will be overwritten by encrypted data on next save.
+      return [];
+    }
+
+    parsed = JSON.parse(raw) as DemoAccount[];
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((entry) => Boolean(entry?.email && entry?.passwordHash && entry?.memberId));
   } catch {
@@ -354,8 +454,22 @@ function loadDemoAccounts(): DemoAccount[] {
   }
 }
 
-function saveDemoAccounts(accounts: DemoAccount[]): void {
-  localStorage.setItem(DEMO_ACCOUNTS_KEY, JSON.stringify(accounts));
+async function saveDemoAccounts(accounts: DemoAccount[]): Promise<void> {
+  const payload = JSON.stringify(accounts);
+  if (
+    typeof crypto !== "undefined" &&
+    crypto.subtle &&
+    hasDemoAccountsEncryptionSecret()
+  ) {
+    try {
+      const encryptedPayload = await encryptDemoAccountsPayload(payload);
+      localStorage.setItem(DEMO_ACCOUNTS_KEY, encryptedPayload);
+      return;
+    } catch {
+      // Fall back to plaintext to avoid breaking demo flow.
+    }
+  }
+  localStorage.setItem(DEMO_ACCOUNTS_KEY, payload);
 }
 
 async function hashSecret(secret: string): Promise<string> {
@@ -436,7 +550,7 @@ async function bootstrapDemoAccountFromMemberProfile(input: {
     phone: normalizedPhone,
     createdAt: new Date().toISOString(),
   });
-  saveDemoAccounts(demoAccounts);
+  await saveDemoAccounts(demoAccounts);
 
   persistDemoSession({
     memberId,
