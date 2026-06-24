@@ -51,6 +51,14 @@ function deriveCompletedTaskIds(user: MemberData): string[] {
     .filter((id): id is string => Boolean(id));
 }
 
+// Persist only non-sensitive fields. PII (phone/birthdate) is refetched via
+// loadMemberSnapshot/refreshUser and is never kept at rest in localStorage.
+function toPersistableUser(user: MemberData): Partial<MemberData> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { phone, birthdate, ...rest } = user;
+  return rest;
+}
+
 function loadUser(): MemberData {
   try {
     const raw = localStorage.getItem(USER_STORAGE_KEY);
@@ -81,7 +89,7 @@ export default function Root() {
   ];
 
   useEffect(() => {
-    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(toPersistableUser(user)));
     userRef.current = user;
   }, [user]);
 

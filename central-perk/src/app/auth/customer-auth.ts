@@ -355,7 +355,12 @@ function loadDemoAccounts(): DemoAccount[] {
 }
 
 function saveDemoAccounts(accounts: DemoAccount[]): void {
-  localStorage.setItem(DEMO_ACCOUNTS_KEY, JSON.stringify(accounts));
+  // Don't keep phone numbers at rest; the demo session is rebuilt at login without them.
+  const sanitized = accounts.map(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ({ phone, ...rest }) => rest
+  );
+  localStorage.setItem(DEMO_ACCOUNTS_KEY, JSON.stringify(sanitized));
 }
 
 async function hashSecret(secret: string): Promise<string> {

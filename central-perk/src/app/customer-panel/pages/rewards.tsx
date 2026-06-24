@@ -100,8 +100,14 @@ function formatRewardCategory(value: string, name = "", description = "") {
 
 function resolveRewardImageUrl(imageUrl?: string | null) {
   const rawImageUrl = String(imageUrl || "").trim();
-  if (rawImageUrl && !rawImageUrl.includes("images.unsplash.com")) return rawImageUrl;
-  return PHARMACY_FALLBACK_IMAGE;
+  if (!rawImageUrl) return PHARMACY_FALLBACK_IMAGE;
+  try {
+    // Compare the actual host, not a substring: "images.unsplash.com.evil.com" must not pass.
+    if (new URL(rawImageUrl).hostname === "images.unsplash.com") return PHARMACY_FALLBACK_IMAGE;
+  } catch {
+    // Relative/non-absolute URL — keep it as-is.
+  }
+  return rawImageUrl;
 }
 
 function buildVoucherScanUrl(voucherId: string, voucherCode: string) {
