@@ -100,18 +100,7 @@ function formatRewardCategory(value: string, name = "", description = "") {
 
 function resolveRewardImageUrl(imageUrl?: string | null) {
   const rawImageUrl = String(imageUrl || "").trim();
-  if (!rawImageUrl) return PHARMACY_FALLBACK_IMAGE;
-
-  try {
-    const base = typeof window !== "undefined" ? window.location.origin : "https://localhost";
-    const parsedUrl = new URL(rawImageUrl, base);
-    const host = parsedUrl.hostname.toLowerCase();
-    const isUnsplashHost = host === "images.unsplash.com" || host.endsWith(".images.unsplash.com");
-    if (!isUnsplashHost) return rawImageUrl;
-  } catch {
-    return rawImageUrl;
-  }
-
+  if (rawImageUrl && !rawImageUrl.includes("images.unsplash.com")) return rawImageUrl;
   return PHARMACY_FALLBACK_IMAGE;
 }
 

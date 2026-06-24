@@ -3,6 +3,12 @@ describe('auth-client helpers', () => {
     jest.resetModules();
     localStorage.clear();
     jest.restoreAllMocks();
+    // jsdom persists document.cookie across tests; clear it so each test starts clean.
+    document.cookie.split(';').forEach((c) => {
+      document.cookie = c
+        .replace(/^ +/, '')
+        .replace(/=.*/, '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/');
+    });
   });
 
   it('stores and clears access tokens', async () => {
@@ -28,10 +34,10 @@ describe('auth-client helpers', () => {
     const authClient = await import('../../src/lib/auth-client');
 
     await expect(authClient.refreshAccessToken()).resolves.toBe('fresh-token');
-    expect(localStorage.getItem('token')).toBe('fresh-token');
+    expect(authClient.getAccessToken()).toBe('fresh-token');
 
     await expect(authClient.refreshAccessToken()).resolves.toBeNull();
-    expect(localStorage.getItem('token')).toBeNull();
+    expect(authClient.getAccessToken()).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -46,7 +52,6 @@ describe('auth-client helpers', () => {
 
     const authClient = await import('../../src/lib/auth-client');
 
-    localStorage.setItem('token', 'stale-token');
     const response = await authClient.fetchWithAuth('/api/cart', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -62,6 +67,6 @@ describe('auth-client helpers', () => {
       })
     );
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(localStorage.getItem('token')).toBe('retry-token');
+    expect(authClient.getAccessToken()).toBe('retry-token');
   });
 });

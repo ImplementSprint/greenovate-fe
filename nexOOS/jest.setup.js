@@ -1,5 +1,8 @@
 require('@testing-library/jest-dom');
 
+// auth.ts refuses to sign/verify without a real JWT secret; provide one for tests.
+process.env.OOS_FRONTEND_JWT_SECRET = process.env.OOS_FRONTEND_JWT_SECRET || 'test-jwt-secret';
+
 const { TextDecoder, TextEncoder } = require('util');
 const {
   ReadableStream,
