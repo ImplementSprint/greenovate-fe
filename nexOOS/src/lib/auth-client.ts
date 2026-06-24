@@ -4,6 +4,9 @@ const ACCESS_TOKEN_KEY = 'access_token';
 const LEGACY_ACCESS_TOKEN_KEY = 'token';
 const DISPLAY_NAME_KEY = 'admin_display_name';
 
+// ponytail: cookie can't be HttpOnly here — the Bearer-header proxy needs JS to read the token.
+// Secure-over-HTTPS + dropping the localStorage duplicate is the reachable hardening without a backend change.
+
 const isBrowser = globalThis.window !== undefined;
 
 function getCookie(name: string): string | null {
@@ -15,7 +18,8 @@ function getCookie(name: string): string | null {
 function setCookie(name: string, value: string, days = 7) {
   if (!isBrowser) return;
   const expires = new Date(Date.now() + days * 864e5).toUTCString();
-  document.cookie = `${name}=${encodeURIComponent(value)};expires=${expires};path=/;SameSite=Lax`;
+  const secure = location.protocol === 'https:' ? ';Secure' : '';
+  document.cookie = `${name}=${encodeURIComponent(value)};expires=${expires};path=/;SameSite=Lax${secure}`;
 }
 
 function deleteCookie(name: string) {
@@ -23,25 +27,18 @@ function deleteCookie(name: string) {
   document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax`;
 }
 
-function getLegacyAccessToken() {
-  return isBrowser ? localStorage.getItem(LEGACY_ACCESS_TOKEN_KEY) : null;
-}
-
-function storeLegacyAccessToken(token: string) {
-  if (isBrowser) localStorage.setItem(LEGACY_ACCESS_TOKEN_KEY, token);
-}
-
 function clearLegacyAccessToken() {
+  // Purge any token left in localStorage by older builds; never write it back.
   if (isBrowser) localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY);
 }
 
 export function getAccessToken() {
-  return getCookie(ACCESS_TOKEN_KEY) ?? getLegacyAccessToken();
+  return getCookie(ACCESS_TOKEN_KEY);
 }
 
 export function storeAccessToken(token: string) {
   setCookie(ACCESS_TOKEN_KEY, token, 7);
-  storeLegacyAccessToken(token);
+  clearLegacyAccessToken();
 }
 
 export function clearAccessToken() {

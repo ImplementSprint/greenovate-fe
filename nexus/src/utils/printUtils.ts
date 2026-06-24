@@ -38,6 +38,17 @@ export interface PrintReceiptData {
 }
 
 /**
+ * Escape user-provided strings before interpolating into receipt HTML (prevents XSS).
+ */
+const escapeHtml = (value: unknown): string =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+/**
  * Format currency for receipt display
  */
 const formatCurrency = (amount: number): string => {
@@ -81,7 +92,7 @@ export const generateReceiptHTML = (data: PrintReceiptData): string => {
   data.items.forEach((item) => {
     itemsHtml += `
       <tr>
-        <td style="text-align: left; padding: 8px 4px;">${item.name}</td>
+        <td style="text-align: left; padding: 8px 4px;">${escapeHtml(item.name)}</td>
         <td style="text-align: center; padding: 8px 4px;">${item.quantity}</td>
         <td style="text-align: right; padding: 8px 4px;">${formatCurrency(item.price)}</td>
         <td style="text-align: right; padding: 8px 4px;">${formatCurrency(item.price * item.quantity)}</td>
@@ -94,13 +105,13 @@ export const generateReceiptHTML = (data: PrintReceiptData): string => {
     data.splitPayments.forEach((payment) => {
       paymentHtml += `
         <div style="display: flex; justify-content: space-between; padding: 4px 0;">
-          <span>${payment.method.toUpperCase()}</span>
+          <span>${escapeHtml(payment.method.toUpperCase())}</span>
           <span>${formatCurrency(payment.amount)}</span>
         </div>
       `;
     });
   } else {
-    paymentHtml = `<p style="margin: 4px 0;">${data.paymentMethod?.toUpperCase() || 'CASH'}</p>`;
+    paymentHtml = `<p style="margin: 4px 0;">${escapeHtml(data.paymentMethod?.toUpperCase() || 'CASH')}</p>`;
   }
 
   return `
@@ -108,7 +119,7 @@ export const generateReceiptHTML = (data: PrintReceiptData): string => {
     <html>
     <head>
       <meta charset="UTF-8" />
-      <title>Receipt ${data.receiptNumber || 'N/A'}</title>
+      <title>Receipt ${escapeHtml(data.receiptNumber || 'N/A')}</title>
       <style>
         body {
           font-family: 'Courier New', monospace;
@@ -192,37 +203,37 @@ export const generateReceiptHTML = (data: PrintReceiptData): string => {
     <body>
       <div class="receipt-header">
         ${data.isReprint ? `<h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: bold;">*** REPRINT ***</h3>` : data.orFields ? `<h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: bold;">OFFICIAL RECEIPT</h3>` : ''}
-        <h2 class="store-name">${storeName}</h2>
-        <p class="store-address">${storeAddress}</p>
-        <p style="margin: 2px 0; font-size: 10px;">TIN: ${storeTin}</p>
-        <p style="margin: 2px 0; font-size: 10px;">PTIN: ${storePtin}</p>
+        <h2 class="store-name">${escapeHtml(storeName)}</h2>
+        <p class="store-address">${escapeHtml(storeAddress)}</p>
+        <p style="margin: 2px 0; font-size: 10px;">TIN: ${escapeHtml(storeTin)}</p>
+        <p style="margin: 2px 0; font-size: 10px;">PTIN: ${escapeHtml(storePtin)}</p>
       </div>
 
       <div class="meta-row">
-        <span>Receipt #: <strong>${data.receiptNumber || 'N/A'}</strong></span>
+        <span>Receipt #: <strong>${escapeHtml(data.receiptNumber || 'N/A')}</strong></span>
       </div>
       <div class="meta-row">
-        <span>Txn ID: ${data.transactionId || 'N/A'}</span>
+        <span>Txn ID: ${escapeHtml(data.transactionId || 'N/A')}</span>
       </div>
       <div class="meta-row">
         <span>${dateStr} ${timeStr}</span>
       </div>
-      ${data.customerName ? `<div class="meta-row"><span>Customer: ${data.customerName}</span></div>` : ''}
+      ${data.customerName ? `<div class="meta-row"><span>Customer: ${escapeHtml(data.customerName)}</span></div>` : ''}
 
       ${data.orFields ? `
       <div class="divider dashed"></div>
       <div style="font-size: 11px; padding: 2px 0;">
         <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
           <span>Name:</span>
-          <strong>${data.orFields.name}</strong>
+          <strong>${escapeHtml(data.orFields.name)}</strong>
         </div>
         <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
           <span>TIN:</span>
-          <strong>${data.orFields.tin}</strong>
+          <strong>${escapeHtml(data.orFields.tin)}</strong>
         </div>
         <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
           <span>Address:</span>
-          <strong>${data.orFields.address}</strong>
+          <strong>${escapeHtml(data.orFields.address)}</strong>
         </div>
       </div>
       ` : ''}
@@ -277,7 +288,7 @@ export const generateReceiptHTML = (data: PrintReceiptData): string => {
         taxBreakdown.discountAmount > 0
           ? `
         <div class="summary-row">
-          <span>Discount ${data.discountType ? `(${data.discountType.toUpperCase()})` : ''}:</span>
+          <span>Discount ${data.discountType ? `(${escapeHtml(data.discountType.toUpperCase())})` : ''}:</span>
           <span>-${formatCurrency(taxBreakdown.discountAmount)}</span>
         </div>
       `

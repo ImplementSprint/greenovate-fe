@@ -1,5 +1,10 @@
 import nodemailer from 'nodemailer';
 
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+};
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+
 const smtpHost = process.env.OOS_FRONTEND_SMTP_HOST;
 const smtpPort = Number(process.env.OOS_FRONTEND_SMTP_PORT || 587);
 const smtpUser = process.env.OOS_FRONTEND_SMTP_USER;
@@ -39,7 +44,7 @@ export async function sendPasswordResetCodeEmail(email: string, code: string) {
         <h2 style="margin-bottom: 8px;">Password Reset Code</h2>
         <p style="margin-top: 0;">Use the verification code below to reset your PharmaQuick password.</p>
         <div style="font-size: 32px; font-weight: 700; letter-spacing: 8px; margin: 24px 0; color: #059669;">
-          ${code}
+          ${escapeHtml(code)}
         </div>
         <p>This code will expire in 10 minutes.</p>
         <p>If you did not request a password reset, you can ignore this email.</p>
@@ -61,7 +66,7 @@ export async function sendRegistrationCodeEmail(email: string, code: string) {
         <h2 style="margin-bottom: 8px;">Verify Your Email</h2>
         <p style="margin-top: 0;">Use the verification code below to finish creating your PharmaQuick account.</p>
         <div style="font-size: 32px; font-weight: 700; letter-spacing: 8px; margin: 24px 0; color: #059669;">
-          ${code}
+          ${escapeHtml(code)}
         </div>
         <p>This code will expire in 10 minutes.</p>
         <p>If you did not request a new account, you can ignore this email.</p>
@@ -82,7 +87,7 @@ export async function sendWelcomeEmail(email: string, fullName: string) {
     html: `
       <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
         <h2 style="margin-bottom: 8px;">Welcome to PharmaQuick</h2>
-        <p style="margin-top: 0;">Hi ${firstName}, your account has been created successfully.</p>
+        <p style="margin-top: 0;">Hi ${escapeHtml(firstName)}, your account has been created successfully.</p>
         <p>We're glad to have you with us and excited to help make your healthcare shopping faster, easier, and more reliable.</p>
         <p>You can now explore trusted products, manage your profile, and enjoy a smoother checkout experience whenever you need it.</p>
         <p style="margin-top: 24px;">Thank you for choosing PharmaQuick.</p>
