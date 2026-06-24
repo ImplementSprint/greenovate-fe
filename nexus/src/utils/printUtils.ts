@@ -50,6 +50,18 @@ const formatCurrency = (amount: number): string => {
 };
 
 /**
+ * Escape untrusted text before injecting into HTML
+ */
+const escapeHtml = (value: string): string => {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+/**
  * Generate HTML for receipt (suitable for printing)
  */
 export const generateReceiptHTML = (data: PrintReceiptData): string => {
@@ -199,15 +211,15 @@ export const generateReceiptHTML = (data: PrintReceiptData): string => {
       </div>
 
       <div class="meta-row">
-        <span>Receipt #: <strong>${data.receiptNumber || 'N/A'}</strong></span>
+        <span>Receipt #: <strong>${escapeHtml(data.receiptNumber || 'N/A')}</strong></span>
       </div>
       <div class="meta-row">
-        <span>Txn ID: ${data.transactionId || 'N/A'}</span>
+        <span>Txn ID: ${escapeHtml(data.transactionId || 'N/A')}</span>
       </div>
       <div class="meta-row">
         <span>${dateStr} ${timeStr}</span>
       </div>
-      ${data.customerName ? `<div class="meta-row"><span>Customer: ${data.customerName}</span></div>` : ''}
+      ${data.customerName ? `<div class="meta-row"><span>Customer: ${escapeHtml(data.customerName)}</span></div>` : ''}
 
       ${data.orFields ? `
       <div class="divider dashed"></div>
