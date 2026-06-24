@@ -1,7 +1,11 @@
-const appendFile = jest.fn();
+const mockAppendFile = jest.fn();
 
 jest.mock('fs/promises', () => ({
-  appendFile,
+  appendFile: mockAppendFile,
+}));
+
+jest.mock('node:fs/promises', () => ({
+  appendFile: mockAppendFile,
 }));
 
 describe('trackSearchQuery', () => {
@@ -13,7 +17,7 @@ describe('trackSearchQuery', () => {
     const { trackSearchQuery } = await import('../../src/lib/search-analytics');
 
     await trackSearchQuery('   ', 'shop');
-    expect(appendFile).not.toHaveBeenCalled();
+    expect(mockAppendFile).not.toHaveBeenCalled();
   });
 
   it('appends trimmed queries to the analytics log', async () => {
@@ -21,7 +25,7 @@ describe('trackSearchQuery', () => {
 
     await trackSearchQuery(' vitamin c ', 'navbar');
 
-    expect(appendFile).toHaveBeenCalledWith(
+    expect(mockAppendFile).toHaveBeenCalledWith(
       expect.stringContaining('search-analytics.log'),
       expect.stringContaining('"query":"vitamin c"'),
       'utf8'

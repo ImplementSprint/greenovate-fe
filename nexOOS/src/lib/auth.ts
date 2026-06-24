@@ -1,7 +1,16 @@
 import jwt from 'jsonwebtoken';
 import { NextResponse } from 'next/server';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
+// Resolve the secret lazily (at sign/verify time), not at module load: a load-time
+// throw would crash `next build` and every test that imports this module, even though
+// the secret is only needed when a token is actually signed or verified.
+function getJwtSecret(): string {
+  const secret = process.env.OOS_FRONTEND_JWT_SECRET;
+  if (!secret) {
+    throw new Error('OOS_FRONTEND_JWT_SECRET is not set. Refusing to sign/verify tokens with a default secret.');
+  }
+  return secret;
+}
 export const REFRESH_TOKEN_COOKIE_NAME = 'refresh_token';
 const ACCESS_TOKEN_EXPIRES_IN = '15m';
 const REFRESH_TOKEN_EXPIRES_IN = '7d';
@@ -12,13 +21,13 @@ type AuthPayload = {
 };
 
 export function signAccessToken(payload: AuthPayload) {
-  return jwt.sign({ ...payload, tokenType: 'access' }, JWT_SECRET, {
+  return jwt.sign({ ...payload, tokenType: 'access' }, getJwtSecret(), {
     expiresIn: ACCESS_TOKEN_EXPIRES_IN,
   });
 }
 
 export function signRefreshToken(payload: AuthPayload) {
-  return jwt.sign({ ...payload, tokenType: 'refresh' }, JWT_SECRET, {
+  return jwt.sign({ ...payload, tokenType: 'refresh' }, getJwtSecret(), {
     expiresIn: REFRESH_TOKEN_EXPIRES_IN,
   });
 }
@@ -35,7 +44,7 @@ const isTokenPayload = (decoded: string | jwt.JwtPayload): decoded is TokenPaylo
   typeof decoded !== 'string';
 
 const decodeToken = (token: string) => {
-  const decoded = jwt.verify(token, JWT_SECRET);
+  const decoded = jwt.verify(token, getJwtSecret());
 
   if (!isTokenPayload(decoded)) {
     return null;

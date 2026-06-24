@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useCallback,
   useRef,
   useState,
   type ChangeEvent,
@@ -15,6 +16,7 @@ import {
   FileText,
   Trash2,
   Printer,
+  RefreshCw,
 } from "lucide-react";
 import {
   Card,
@@ -25,6 +27,11 @@ import {
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import {
+  blockInvalidNumberKeys,
+  sanitizeDecimalInput,
+  sanitizeIntegerInput,
+} from "@/lib/inputSanitizers";
 import { Textarea } from "../ui/textarea";
 import {
   Select,
@@ -49,7 +56,19 @@ import {
 } from "../ui/tabs";
 import { toast } from "sonner";
 import JsBarcode from "jsbarcode";
-import { projectId, publicAnonKey } from "@/utils/supabase/info";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/lib/supabase";
+import {
+  createCatalogProduct,
+  deleteCatalogProduct,
+  updateCatalogProduct,
+} from "@/lib/productCatalogService";
+import {
+  scmProjectId,
+  scmPublicAnonKey,
+  fulfillmentProjectId,
+  fulfillmentPublicAnonKey,
+} from "@/utils/supabase/info";
 
 interface Product {
   id: string;
@@ -117,8 +136,46 @@ const formatMoney = (
 const normalizeLocationValue = (value: string): string =>
   value.trim().toLowerCase();
 
+const DEFAULT_CATEGORIES: ProductCategory[] = [
+  { id: "analgesics", name: "Analgesics", parent_id: null },
+  { id: "antibiotics", name: "Antibiotics", parent_id: null },
+  { id: "baby-care", name: "Baby Care", parent_id: null },
+  { id: "consumables", name: "Consumables", parent_id: null },
+  { id: "devices", name: "Devices", parent_id: null },
+  { id: "diabetes-care", name: "Diabetes Care", parent_id: null },
+  { id: "first-aid", name: "First Aid", parent_id: null },
+  { id: "health-wellness", name: "Health & Wellness", parent_id: null },
+  { id: "maintenance-medicines", name: "Maintenance Medicines", parent_id: null },
+  { id: "otc-medications", name: "OTC Medications", parent_id: null },
+  { id: "personal-care", name: "Personal Care", parent_id: null },
+  { id: "refrigerated", name: "Refrigerated", parent_id: null },
+  { id: "vitamins-supplements", name: "Vitamins & Supplements", parent_id: null },
+];
+
+const LEGACY_CATEGORY_MAPPING: Record<string, string> = {
+  "otc medications": "otc-medications",
+  "vitamins & supplements": "vitamins-supplements",
+  "personal care": "personal-care",
+  "first-aid": "first-aid",
+  "first aid": "first-aid",
+  "health & wellness": "health-wellness",
+  "baby care": "baby-care",
+};
+
 const inventoryRowsPerPage = 10;
 const pricingRowsPerPage = 10;
+const scmRestBaseUrl = `https://${scmProjectId}.supabase.co/rest/v1`;
+const fulfillmentRestBaseUrl = `https://${fulfillmentProjectId}.supabase.co/rest/v1`;
+const scmHeaders = {
+  apikey: scmPublicAnonKey,
+  Authorization: `Bearer ${scmPublicAnonKey}`,
+  "Content-Type": "application/json",
+};
+const fulfillmentHeaders = {
+  apikey: fulfillmentPublicAnonKey,
+  Authorization: `Bearer ${fulfillmentPublicAnonKey}`,
+  "Content-Type": "application/json",
+};
 
 const buildCategoryOptions = (
   rows: ProductCategory[],
@@ -274,6 +331,7 @@ const BarcodePreview = ({ value }: { value: string }) => {
 };
 
 export function ProductMaster() {
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   const [parentCategoryFilter, setParentCategoryFilter] =
     useState<string>("all");
@@ -297,14 +355,16 @@ export function ProductMaster() {
   const [selectedProduct, setSelectedProduct] =
     useState<Product | null>(null);
 
-  const [showDebugPanel, setShowDebugPanel] = useState(false);
-  const [debugLogs, setDebugLogs] = useState<any[]>([]);
-  const [lastPayload, setLastPayload] = useState<any>(null);
-  const [lastResponse, setLastResponse] = useState<any>(null);
 
   const [categories, setCategories] = useState<
     ProductCategory[]
-  >([]);
+  >(DEFAULT_CATEGORIES);
+  const [dbLocations, setDbLocations] = useState<{ id: string; name: string }[]>([]);
+  const [suppliers, setSuppliers] = useState<{ id: string; supplier_name: string }[]>([]);
+  const [isCategoriesLoading, setIsCategoriesLoading] =
+    useState(true);
+  const [categoriesLoadError, setCategoriesLoadError] =
+    useState("");
   const [
     selectedParentCategoryId,
     setSelectedParentCategoryId,
@@ -353,33 +413,55 @@ export function ProductMaster() {
     message: string,
     data?: any,
   ) => {
-    const log = {
-      timestamp: new Date().toISOString(),
-      type,
-      message,
-      data,
-    };
-    setDebugLogs((prev) => [log, ...prev]);
     console.log(`[${type}]`, message, data || "");
   };
+
+  const resolvePricingActor = async () => {
+    const contextActor =
+      user?.email?.trim() || user?.id || "";
+    if (contextActor) return contextActor;
+
+    const {
+      data: { user: authUser },
+    } = await supabase.auth.getUser();
+    const sessionActor =
+      authUser?.email?.trim() || authUser?.id || "";
+    if (sessionActor) return sessionActor;
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const resolvedActor =
+      session?.user?.email?.trim() ||
+      session?.user?.id ||
+      "";
+
+    if (!resolvedActor) {
+      throw new Error(
+        "Unable to identify the logged-in user for pricing history.",
+      );
+    }
+
+    return resolvedActor;
+  };
   const loadProducts = async () => {
-    const productsUrl = `https://${projectId}.supabase.co/rest/v1/products?select=product_id,product_uuid,sku,product_name,unit,category,category_id,barcode,supplier,warehouse_location,unit_price,currency_code,inventory_on_hand,created_at`;
-    const inventoryUrl = `https://${projectId}.supabase.co/rest/v1/v_products_with_inventory?select=product_id,qty_on_hand,updated_at`;
+    const productsUrl = `${scmRestBaseUrl}/products?select=product_id,product_uuid,sku,product_name,unit,category,category_id,barcode,supplier,warehouse_location,unit_price,currency_code,inventory_on_hand,created_at`;
+    const inventoryUrl = `${fulfillmentRestBaseUrl}/inventory_on_hand?select=product_id,qty_on_hand,updated_at`;
 
     try {
       addDebugLog(
         "info",
-        "Loading products + inventory from shared database",
+        "Loading products from SCM and inventory from Fulfillment",
       );
-      const headers = {
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`,
-        "Content-Type": "application/json",
-      };
-
       const [productsRes, inventoryRes] = await Promise.all([
-        fetch(productsUrl, { method: "GET", headers }),
-        fetch(inventoryUrl, { method: "GET", headers }),
+        fetch(productsUrl, {
+          method: "GET",
+          headers: scmHeaders,
+        }),
+        fetch(inventoryUrl, {
+          method: "GET",
+          headers: fulfillmentHeaders,
+        }),
       ]);
 
       if (!productsRes.ok) {
@@ -412,17 +494,26 @@ export function ProductMaster() {
       const mappedProducts: Product[] = (productRows || []).map(
         (p: any) => {
           const inventory = inventoryByProductId.get(
-            String(p.product_id),
+            String(p.product_uuid ?? p.product_id),
           );
+
+          // Map legacy category name to the new product_categories UUID if category_id is null
+          let categoryId = p.category_id;
+          if (!categoryId && p.category) {
+            const normalized = p.category.toLowerCase().trim();
+            categoryId = LEGACY_CATEGORY_MAPPING[normalized] || p.category;
+          }
+          if (!categoryId) {
+            categoryId = "uncategorized";
+          }
+
           return {
             id:
               p.product_id?.toString() || Date.now().toString(),
             product_uuid: p.product_uuid || "",
             sku: p.sku || "",
             name: p.product_name || "",
-            category_id: (p.category_id ||
-              p.category ||
-              "uncategorized") as string,
+            category_id: categoryId as string,
             category_text: p.category || "",
             barcode: p.barcode || "",
             supplier: p.supplier || "",
@@ -455,16 +546,11 @@ export function ProductMaster() {
   };
 
   const loadProductPricing = async () => {
-    const pricingUrl = `https://${projectId}.supabase.co/rest/v1/product_pricing?select=pricing_id,product_id,cost_price,selling_price,currency_code,effective_from,effective_to,created_at,created_by,updated_at,updated_by,is_active&order=effective_from.desc,created_at.desc`;
+    const pricingUrl = `${scmRestBaseUrl}/product_pricing?select=pricing_id,product_id,cost_price,selling_price,currency_code,effective_from,effective_to,created_at,created_by,updated_at,updated_by,is_active&order=effective_from.desc,created_at.desc`;
     try {
-      const headers = {
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`,
-        "Content-Type": "application/json",
-      };
       const response = await fetch(pricingUrl, {
         method: "GET",
-        headers,
+        headers: scmHeaders,
       });
       if (!response.ok) {
         const text = await response.text();
@@ -499,21 +585,22 @@ export function ProductMaster() {
       actor?: string;
     },
   ): Promise<boolean> => {
-    const headers = {
-      apikey: publicAnonKey,
-      Authorization: `Bearer ${publicAnonKey}`,
-      "Content-Type": "application/json",
-    };
-    const actor = options?.actor || "product_master_ui";
+    const actor = options?.actor?.trim();
+    if (!actor) {
+      throw new Error(
+        "Unable to identify the logged-in user for pricing history.",
+      );
+    }
+
     const normalizedCurrency = (currencyCode || "PHP").trim();
     const today = new Date().toISOString().slice(0, 10);
     const nowIso = new Date().toISOString();
 
     const activeRes = await fetch(
-      `https://${projectId}.supabase.co/rest/v1/product_pricing?select=pricing_id,cost_price,selling_price,currency_code,is_active&product_id=eq.${productId}&is_active=eq.true&order=effective_from.desc,created_at.desc&limit=1`,
+      `${scmRestBaseUrl}/product_pricing?select=pricing_id,cost_price,selling_price,currency_code,is_active&product_id=eq.${productId}&is_active=eq.true&order=effective_from.desc,created_at.desc&limit=1`,
       {
         method: "GET",
-        headers,
+        headers: scmHeaders,
       },
     );
     if (!activeRes.ok) {
@@ -535,17 +622,20 @@ export function ProductMaster() {
       Number(currentRecord.selling_price) === sellingPrice &&
       Number(currentRecord.cost_price) === resolvedCostPrice &&
       (currentRecord.currency_code || "PHP") ===
-        normalizedCurrency
+      normalizedCurrency
     ) {
       return false;
     }
 
     if (currentRecord?.pricing_id && currentRecord.is_active) {
       const deactivateRes = await fetch(
-        `https://${projectId}.supabase.co/rest/v1/product_pricing?pricing_id=eq.${currentRecord.pricing_id}`,
+        `${scmRestBaseUrl}/product_pricing?pricing_id=eq.${currentRecord.pricing_id}`,
         {
           method: "PATCH",
-          headers: { ...headers, Prefer: "return=minimal" },
+          headers: {
+            ...scmHeaders,
+            Prefer: "return=minimal",
+          },
           body: JSON.stringify({
             is_active: false,
             effective_to: today,
@@ -563,10 +653,13 @@ export function ProductMaster() {
     }
 
     const insertRes = await fetch(
-      `https://${projectId}.supabase.co/rest/v1/product_pricing`,
+      `${scmRestBaseUrl}/product_pricing`,
       {
         method: "POST",
-        headers: { ...headers, Prefer: "return=minimal" },
+        headers: {
+          ...scmHeaders,
+          Prefer: "return=minimal",
+        },
         body: JSON.stringify({
           product_id: productId,
           cost_price: resolvedCostPrice,
@@ -592,47 +685,75 @@ export function ProductMaster() {
     refreshProductAndPricing();
   }, []);
 
-  // Fetch categories from database
-  useEffect(() => {
-    const loadCategories = async () => {
-      try {
-        addDebugLog("info", "Loading categories from database");
-        const categoriesUrl = `https://${projectId}.supabase.co/rest/v1/product_categories?select=id,name,parent_id`;
-        const response = await fetch(categoriesUrl, {
-          method: "GET",
-          headers: {
-            apikey: publicAnonKey,
-            Authorization: `Bearer ${publicAnonKey}`,
-            "Content-Type": "application/json",
-          },
-        });
+  const loadCategories = useCallback(async () => {
+    setIsCategoriesLoading(true);
+    setCategoriesLoadError("");
+    try {
+      const categoriesUrl = `${scmRestBaseUrl}/product_categories?select=id,name,parent_id&order=name.asc`;
+      const response = await fetch(categoriesUrl, {
+        method: "GET",
+        headers: scmHeaders,
+      });
 
-        if (!response.ok) {
-          addDebugLog(
-            "error",
-            `Categories load failed (${response.status})`,
-          );
-          return;
-        }
-
-        const fetchedCategories = await response.json();
-        setCategories(fetchedCategories);
-
-        addDebugLog(
-          "success",
-          `Loaded ${fetchedCategories.length} categories with hierarchy`,
-        );
-      } catch (error) {
-        addDebugLog(
-          "error",
-          "Failed to load categories",
-          error,
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(
+          text || `Failed to load categories (${response.status})`,
         );
       }
-    };
 
-    loadCategories();
+      const rows = (await response.json()) as ProductCategory[];
+      if (Array.isArray(rows) && rows.length > 0) {
+        setCategories(rows);
+      } else {
+        setCategories(DEFAULT_CATEGORIES);
+        setCategoriesLoadError(
+          "No categories found in the database",
+        );
+      }
+    } catch (error) {
+      setCategories(DEFAULT_CATEGORIES);
+      setCategoriesLoadError(
+        "Failed to load categories from the database",
+      );
+      addDebugLog("error", "Failed to load categories", error);
+    } finally {
+      setIsCategoriesLoading(false);
+    }
   }, []);
+
+  const loadDbLocations = useCallback(async () => {
+    try {
+      const binsUrl = `${fulfillmentRestBaseUrl}/bins?select=id,name`;
+      const response = await fetch(binsUrl, { method: "GET", headers: fulfillmentHeaders });
+      if (response.ok) {
+        const bins = await response.json();
+        setDbLocations(bins || []);
+      }
+    } catch (e) {
+      addDebugLog("error", "Failed to load locations from bins", e);
+    }
+  }, []);
+
+  const loadSuppliers = useCallback(async () => {
+    try {
+      const suppliersUrl = `${scmRestBaseUrl}/suppliers?select=id,supplier_name&status=eq.Active`;
+      const response = await fetch(suppliersUrl, { method: "GET", headers: scmHeaders });
+      if (response.ok) {
+        const data = await response.json();
+        setSuppliers(data || []);
+      }
+    } catch (e) {
+      addDebugLog("error", "Failed to load suppliers", e);
+    }
+  }, []);
+
+  // Fetch categories and locations from database
+  useEffect(() => {
+    loadCategories();
+    loadDbLocations();
+    loadSuppliers();
+  }, [loadCategories, loadDbLocations, loadSuppliers]);
 
   const categoriesById = useMemo(() => {
     return new Map(categories.map((c) => [c.id, c]));
@@ -677,7 +798,7 @@ export function ProductMaster() {
       const matchesLocation =
         locationFilter === "all" ||
         normalizeLocationValue(product.location || "") ===
-          locationFilter;
+          normalizeLocationValue(locationFilter);
       return (
         matchesSearch &&
         matchesParent &&
@@ -704,8 +825,11 @@ export function ProductMaster() {
   ]);
 
   const parentCategories = useMemo(
-    () => categories.filter((c) => !c.parent_id),
-    [categories],
+    () =>
+      categories.filter(
+        (c) => !c.parent_id || !categoriesById.has(c.parent_id),
+      ),
+    [categories, categoriesById],
   );
 
   const pagedInventoryProducts = useMemo(() => {
@@ -739,12 +863,12 @@ export function ProductMaster() {
 
   const categoryLabelById = useMemo(() => {
     const options = buildCategoryOptions(categories);
+    console.log("DEBUG: categoryLabelById options", options);
     return new Map(options.map((o) => [o.id, o.label]));
   }, [categories]);
 
   const getCategoryText = (categoryId: string): string => {
     return (
-      categoryLabelById.get(categoryId) ||
       categoriesById.get(categoryId)?.name ||
       categoryId
     );
@@ -756,13 +880,11 @@ export function ProductMaster() {
   ) => {
     if (!productId || !categoryText) return;
     await fetch(
-      `https://${projectId}.supabase.co/rest/v1/products?product_id=eq.${encodeURIComponent(productId)}`,
+      `${scmRestBaseUrl}/products?product_id=eq.${encodeURIComponent(productId)}`,
       {
         method: "PATCH",
         headers: {
-          apikey: publicAnonKey,
-          Authorization: `Bearer ${publicAnonKey}`,
-          "Content-Type": "application/json",
+          ...scmHeaders,
           Prefer: "return=minimal",
         },
         body: JSON.stringify({ category: categoryText }),
@@ -771,47 +893,66 @@ export function ProductMaster() {
   };
 
   const locationOptions = useMemo(() => {
-    const byNormalized = new Map<string, string>();
-    for (const product of products) {
-      const raw = (product.location || "").trim();
-      if (!raw) continue;
-      const normalized = normalizeLocationValue(raw);
-      if (!byNormalized.has(normalized)) {
-        byNormalized.set(normalized, raw);
+    const deduped = new Map<string, string>();
+
+    const appendLocation = (value: string | null | undefined) => {
+      const trimmed = value?.trim();
+      if (!trimmed) return;
+      const key = normalizeLocationValue(trimmed);
+      if (!deduped.has(key)) {
+        deduped.set(key, trimmed);
       }
-    }
-    return Array.from(byNormalized.entries())
-      .map(([value, label]) => ({ value, label }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [products]);
+    };
+
+    products.forEach((product) => appendLocation(product.location));
+    dbLocations.forEach((location) => appendLocation(location.name));
+
+    return Array.from(deduped.values())
+      .sort((a, b) => a.localeCompare(b))
+      .map((value) => ({ value, label: value }));
+  }, [dbLocations, products]);
 
   const unitOptions = ["bottle", "box", "pcs"] as const;
   const currencyOptions = ["PHP", "JPY", "USD"] as const;
 
-  const getCategoryColor = (category: string) => {
-    switch (category) {
-      case "pharma":
-        return "bg-[#00A3AD] text-white";
-      case "medical_supplies":
-        return "bg-[#1A2B47] text-white";
-      case "cold_chain":
-        return "bg-[#0891B2] text-white";
-      default:
-        return "bg-[#D1D5DB] text-[#111827]";
+  const getCategoryColor = (categoryId: string) => {
+    const { parentId } = getProductCategoryLineage(categoryId);
+    const resolvedCategoryName = (
+      categoriesById.get(parentId || categoryId)?.name || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    if (resolvedCategoryName === "pharma") {
+      return "bg-[#00A3AD] text-white";
     }
+    if (resolvedCategoryName === "medical supplies") {
+      return "bg-[#1A2B47] text-white";
+    }
+    if (resolvedCategoryName === "cold chain") {
+      return "bg-[#0891B2] text-white";
+    }
+    return "bg-[#D1D5DB] text-[#111827]";
   };
 
   const generateSKU = (
     productName: string,
-    category: string,
+    categoryId: string,
   ): string => {
     const prefix = productName.substring(0, 3).toUpperCase();
-    const categoryCode =
-      category === "pharma"
-        ? "PH"
-        : category === "cold"
-          ? "CC"
-          : "MS";
+    const { parentId } = getProductCategoryLineage(categoryId);
+    const resolvedCategoryName = (
+      categoriesById.get(parentId || categoryId)?.name || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    let categoryCode = "MS";
+    if (resolvedCategoryName === "pharma") {
+      categoryCode = "PH";
+    } else if (resolvedCategoryName === "cold chain") {
+      categoryCode = "CC";
+    }
     const random = Math.floor(Math.random() * 1000);
     return `${prefix}-${categoryCode}-${random}`;
   };
@@ -945,9 +1086,10 @@ export function ProductMaster() {
           const cells = parseCsvLine(line);
           const productName = cells[idx("product_name")] || "";
           const categoryId = cells[idx("category_id")] || "";
-          const normalizedRowBarcode = toValidEan13(
-            cells[idx("barcode")] || "",
-          );
+          // Use CSV barcode if valid; otherwise auto-generate a GS1-compliant internal EAN-13
+          const normalizedRowBarcode =
+            toValidEan13(cells[idx("barcode")] || "") ||
+            generateSystemEan13(Date.now().toString() + Math.random().toString());
           const sku =
             cells[idx("sku")] ||
             generateSKU(productName || "PRD", categoryId || "");
@@ -956,7 +1098,7 @@ export function ProductMaster() {
             product_name: productName,
             category_id: categoryId,
             category: getCategoryText(categoryId),
-            barcode: normalizedRowBarcode || "",
+            barcode: normalizedRowBarcode,
             supplier: cells[idx("supplier")] || "",
             warehouse_location:
               cells[idx("warehouse_location")] || "",
@@ -971,7 +1113,6 @@ export function ProductMaster() {
           (p) =>
             p.product_name &&
             p.category_id &&
-            p.barcode &&
             p.supplier &&
             p.warehouse_location,
         );
@@ -985,39 +1126,11 @@ export function ProductMaster() {
       }
       let inserted = 0;
       for (const row of rowsToInsert) {
-        const response = await fetch(
-          `https://${projectId}.supabase.co/rest/v1/products?select=product_id`,
-          {
-            method: "POST",
-            headers: {
-              apikey: publicAnonKey,
-              Authorization: `Bearer ${publicAnonKey}`,
-              "Content-Type": "application/json",
-              Prefer: "return=representation",
-            },
-            body: JSON.stringify(row),
-          },
-        );
-        if (!response.ok) {
-          const rawError = await response.text();
-          const parsedError = parseSupabaseError(rawError);
-          const fallback =
-            parsedError?.message ||
-            parsedError?.hint ||
-            parsedError?.details ||
-            rawError;
-          throw new Error(
-            toProductValidationMessage(parsedError, fallback),
-          );
-        }
-        const insertedRows = await response.json();
-        const insertedProductId = insertedRows?.[0]?.product_id;
-        if (insertedProductId) {
-          await patchCategoryDisplay(
-            String(insertedProductId),
-            row.category,
-          );
-        }
+        await createCatalogProduct({
+          ...row,
+          cost_price: Number(row.unit_price ?? 0),
+          currency_code: "PHP",
+        });
         inserted += 1;
       }
 
@@ -1066,25 +1179,22 @@ export function ProductMaster() {
     stockQty: number,
   ) => {
     if (!productUuid) return;
-    const headers = {
-      apikey: publicAnonKey,
-      Authorization: `Bearer ${publicAnonKey}`,
-      "Content-Type": "application/json",
-    };
-
     const invLookup = await fetch(
-      `https://${projectId}.supabase.co/rest/v1/inventory_on_hand?select=product_id,bin_id&product_id=eq.${encodeURIComponent(productUuid)}&limit=1`,
-      { method: "GET", headers },
+      `${fulfillmentRestBaseUrl}/inventory_on_hand?select=product_id,bin_id&product_id=eq.${encodeURIComponent(productUuid)}&limit=1`,
+      { method: "GET", headers: fulfillmentHeaders },
     );
     const invRows = invLookup.ok ? await invLookup.json() : [];
 
     if (invRows.length > 0) {
       const row = invRows[0];
       await fetch(
-        `https://${projectId}.supabase.co/rest/v1/inventory_on_hand?product_id=eq.${encodeURIComponent(row.product_id)}&bin_id=eq.${encodeURIComponent(row.bin_id)}`,
+        `${fulfillmentRestBaseUrl}/inventory_on_hand?product_id=eq.${encodeURIComponent(row.product_id)}&bin_id=eq.${encodeURIComponent(row.bin_id)}`,
         {
           method: "PATCH",
-          headers: { ...headers, Prefer: "return=minimal" },
+          headers: {
+            ...fulfillmentHeaders,
+            Prefer: "return=minimal",
+          },
           body: JSON.stringify({ qty_on_hand: stockQty }),
         },
       );
@@ -1092,8 +1202,8 @@ export function ProductMaster() {
     }
 
     const binLookup = await fetch(
-      `https://${projectId}.supabase.co/rest/v1/inventory_on_hand?select=bin_id&limit=1`,
-      { method: "GET", headers },
+      `${fulfillmentRestBaseUrl}/inventory_on_hand?select=bin_id&limit=1`,
+      { method: "GET", headers: fulfillmentHeaders },
     );
     let binId: string | null = null;
     if (binLookup.ok) {
@@ -1105,8 +1215,8 @@ export function ProductMaster() {
 
     if (!binId) {
       const binsTableLookup = await fetch(
-        `https://${projectId}.supabase.co/rest/v1/bins?select=id&limit=1`,
-        { method: "GET", headers },
+        `${fulfillmentRestBaseUrl}/bins?select=id&limit=1`,
+        { method: "GET", headers: fulfillmentHeaders },
       );
       if (binsTableLookup.ok) {
         const binsRows = await binsTableLookup.json();
@@ -1117,14 +1227,22 @@ export function ProductMaster() {
     }
 
     if (!binId) {
-      throw new Error("Cannot sync stock: no bin available");
+      addDebugLog(
+        "warning",
+        "Skipped stock sync because no fulfillment bin is available yet",
+        { productUuid, stockQty },
+      );
+      return;
     }
 
     await fetch(
-      `https://${projectId}.supabase.co/rest/v1/inventory_on_hand`,
+      `${fulfillmentRestBaseUrl}/inventory_on_hand`,
       {
         method: "POST",
-        headers: { ...headers, Prefer: "return=minimal" },
+        headers: {
+          ...fulfillmentHeaders,
+          Prefer: "return=minimal",
+        },
         body: JSON.stringify({
           product_id: productUuid,
           bin_id: binId,
@@ -1203,12 +1321,6 @@ export function ProductMaster() {
 
     setIsUpdating(true);
     try {
-      const headers = {
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`,
-        "Content-Type": "application/json",
-      };
-
       const payload = {
         product_name: editFormData.productName.trim(),
         category_id: resolvedUpdateCategoryId,
@@ -1221,42 +1333,10 @@ export function ProductMaster() {
         unit_price: nextUnitPrice,
         inventory_on_hand:
           parseInt(editFormData.currentStock || "0", 10) || 0,
+        cost_price: nextCostPrice,
       };
 
-      const updateRes = await fetch(
-        `https://${projectId}.supabase.co/rest/v1/products?product_id=eq.${selectedProduct.id}`,
-        {
-          method: "PATCH",
-          headers: { ...headers, Prefer: "return=minimal" },
-          body: JSON.stringify(payload),
-        },
-      );
-      if (!updateRes.ok) {
-        const errorData = await updateRes.text();
-        const parsedError = parseSupabaseError(errorData);
-        const fallbackErrorMessage =
-          parsedError?.message ||
-          parsedError?.hint ||
-          parsedError?.details ||
-          errorData;
-        throw new Error(
-          toProductValidationMessage(
-            parsedError,
-            fallbackErrorMessage,
-          ),
-        );
-      }
-      await patchCategoryDisplay(
-        selectedProduct.id,
-        getCategoryText(resolvedUpdateCategoryId),
-      );
-
-      if (selectedProduct.product_uuid) {
-        await syncInventoryOnHand(
-          selectedProduct.product_uuid,
-          parseInt(editFormData.currentStock || "0", 10) || 0,
-        );
-      }
+      await updateCatalogProduct(selectedProduct.id, payload);
 
       const nextCurrency = editFormData.currencyCode.trim();
       const previousUnitPrice = Number(
@@ -1272,24 +1352,28 @@ export function ProductMaster() {
         previousUnitPrice !== nextUnitPrice ||
         previousCostPrice !== nextCostPrice ||
         previousCurrency !== nextCurrency;
-      const numericProductId = Number(selectedProduct.id);
-      if (priceChanged && !Number.isNaN(numericProductId)) {
-        await upsertProductPricingHistory(
-          numericProductId,
-          nextUnitPrice,
-          nextCurrency,
-          {
-            actor: "product_master_ui",
-            costPrice: nextCostPrice,
-          },
-        );
+      if (priceChanged) {
+        if (typeof window !== "undefined" && window.localStorage.getItem("USE_REAL_SERVICES") !== "true") {
+          addDebugLog("info", "Offline mode detected, manually updating pricing history");
+          const actor = await resolvePricingActor();
+          await upsertProductPricingHistory(
+            Number(selectedProduct.id),
+            nextUnitPrice,
+            nextCurrency,
+            { costPrice: nextCostPrice, actor }
+          );
+        } else {
+          addDebugLog(
+            "info",
+            "Pricing changes handled by product catalog service update",
+          );
+        }
       }
-
       await refreshProductAndPricing();
       setShowEditDialog(false);
       setSelectedProduct(null);
       toast.success("Product updated", {
-        description: `${editFormData.productName} saved to database`,
+        description: `${editFormData.productName} has been updated in the product master`,
       });
     } catch (error) {
       const message =
@@ -1311,55 +1395,9 @@ export function ProductMaster() {
         `Deleting product: ${selectedProduct.name} (ID: ${selectedProduct.id})`,
       );
 
-      const headers = {
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`,
-        "Content-Type": "application/json",
-      };
-
-      // Delete from products table
-      const deleteRes = await fetch(
-        `https://${projectId}.supabase.co/rest/v1/products?product_id=eq.${selectedProduct.id}`,
-        {
-          method: "DELETE",
-          headers: { ...headers, Prefer: "return=minimal" },
-        },
-      );
-
-      if (!deleteRes.ok) {
-        const errorText = await deleteRes.text();
-        addDebugLog(
-          "error",
-          `Delete failed (${deleteRes.status})`,
-          errorText,
-        );
-        throw new Error(errorText || "Delete failed");
-      }
+      await deleteCatalogProduct(selectedProduct.id);
 
       addDebugLog("success", "Product deleted from database");
-
-      // Optionally delete related inventory records
-      if (selectedProduct.product_uuid) {
-        try {
-          await fetch(
-            `https://${projectId}.supabase.co/rest/v1/inventory_on_hand?product_id=eq.${encodeURIComponent(selectedProduct.product_uuid)}`,
-            {
-              method: "DELETE",
-              headers: { ...headers, Prefer: "return=minimal" },
-            },
-          );
-          addDebugLog(
-            "success",
-            "Related inventory records cleaned up",
-          );
-        } catch (invError) {
-          addDebugLog(
-            "warning",
-            "Inventory cleanup failed (non-critical)",
-            invError,
-          );
-        }
-      }
 
       await refreshProductAndPricing();
       setShowDeleteDialog(false);
@@ -1454,7 +1492,7 @@ export function ProductMaster() {
     setIsSubmitting(true);
     addDebugLog(
       "info",
-      "Starting product submission via Supabase REST API",
+      "Starting product submission via product catalog service",
     );
 
     try {
@@ -1480,109 +1518,44 @@ export function ProductMaster() {
         created_at: new Date().toISOString(),
       };
 
-      setLastPayload(productPayload);
       addDebugLog(
         "info",
-        "Payload mapped to public.products schema",
+        "Payload mapped to product catalog service schema",
         productPayload,
       );
 
-      const apiUrl = `https://${projectId}.supabase.co/rest/v1/products`;
-      addDebugLog(
-        "info",
-        `POST request to Supabase REST API: ${apiUrl}`,
-      );
+      const createdProduct = await createCatalogProduct({
+        ...productPayload,
+        cost_price: nextCostPrice,
+      });
 
-      const headers = {
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${publicAnonKey}`,
-        "Content-Type": "application/json",
-      };
-
-      const response = await fetch(
-        `${apiUrl}?select=product_id`,
-        {
-          method: "POST",
-          headers: {
-            ...headers,
-            Prefer: "return=representation",
-          },
-          body: JSON.stringify(productPayload),
-        },
-      );
-
-      addDebugLog(
-        "info",
-        `HTTP Status: ${response.status} ${response.statusText}`,
-      );
-
-      if (response.status !== 201) {
-        const errorData = await response.text();
-
-        const parsedError = parseSupabaseError(errorData);
-        const fallbackErrorMessage =
-          parsedError?.message ||
-          parsedError?.hint ||
-          parsedError?.details ||
-          errorData;
-        const errorMessage = toProductValidationMessage(
-          parsedError,
-          fallbackErrorMessage,
-        );
-
-        setLastResponse({
-          error: true,
-          status: response.status,
-          statusText: response.statusText,
-          rawError: errorData,
-          parsedError: parsedError,
-          data: errorMessage,
-        });
-        addDebugLog(
-          "error",
-          `API Error Response (${response.status})`,
-          { rawError: errorData, parsedError },
-        );
-        throw new Error(errorMessage);
-      }
-
-      const insertedRows = await response.json();
-      const insertedProductId = insertedRows?.[0]?.product_id;
-      if (insertedProductId) {
-        await patchCategoryDisplay(
-          String(insertedProductId),
-          getCategoryText(resolvedCategoryId),
-        );
-        const numericProductId = Number(insertedProductId);
-        if (!Number.isNaN(numericProductId)) {
-          await upsertProductPricingHistory(
-            numericProductId,
-            nextUnitPrice,
-            formData.currencyCode || "PHP",
-            {
-              costPrice: nextCostPrice,
-              actor: "product_master_ui",
-            },
-          );
-        }
-      }
+      addDebugLog("info", "Product catalog service response", {
+        product_id: createdProduct?.product_id,
+        product_uuid: createdProduct?.product_uuid,
+      });
 
       addDebugLog(
         "success",
-        "Product inserted successfully (HTTP 201)",
+        "Product inserted successfully",
       );
+
+      if (typeof window !== "undefined" && window.localStorage.getItem("USE_REAL_SERVICES") !== "true" && createdProduct?.product_id) {
+        addDebugLog("info", "Offline mode detected, manually recording initial pricing history");
+        const actor = await resolvePricingActor();
+        await upsertProductPricingHistory(
+          Number(createdProduct.product_id),
+          nextUnitPrice,
+          formData.currencyCode || "PHP",
+          { costPrice: nextCostPrice, actor }
+        );
+      }
       addDebugLog(
         "info",
         "Refreshing product list from database...",
       );
       await refreshProductAndPricing();
-      setLastResponse({
-        success: true,
-        message: "Product created and table refreshed",
-      });
-
       toast.success("Product Added Successfully", {
-        description: `${formData.productName} (${generatedSKU}) has been saved to the database`,
+        description: `${formData.productName} (${generatedSKU}) has been successfully added to the catalog`,
       });
 
       setFormData({
@@ -2023,7 +1996,24 @@ export function ProductMaster() {
           </Dialog>
           <Dialog
             open={showNewProductDialog}
-            onOpenChange={setShowNewProductDialog}
+            onOpenChange={(open) => {
+              setShowNewProductDialog(open);
+              if (open) {
+                setSelectedParentCategoryId("");
+                setSelectedChildCategoryId("");
+                if (
+                  !isCategoriesLoading &&
+                  categories.length === 0
+                ) {
+                  void loadCategories();
+                }
+                // Auto-generate a valid internal EAN-13 barcode (GS1 prefix 299)
+                setFormData((prev) => ({
+                  ...prev,
+                  barcode: generateSystemEan13(Date.now().toString()),
+                }));
+              }
+            }}
           >
             <DialogTrigger asChild>
               <Button className="bg-[#00A3AD] hover:bg-[#0891B2] text-white shadow-sm">
@@ -2083,19 +2073,32 @@ export function ProductMaster() {
                       <SelectValue placeholder="Select parent category" />
                     </SelectTrigger>
                     <SelectContent>
-                      {parentCategories.length > 0 ? (
+                      {isCategoriesLoading ? (
+                        <SelectItem value="loading" disabled>
+                          Loading...
+                        </SelectItem>
+                      ) : parentCategories.length > 0 ? (
                         parentCategories.map((c) => (
                           <SelectItem key={c.id} value={c.id}>
                             {c.name}
                           </SelectItem>
                         ))
+                      ) : categoriesLoadError ? (
+                        <SelectItem value="load-error" disabled>
+                          Failed to load categories
+                        </SelectItem>
                       ) : (
-                        <SelectItem value="loading" disabled>
-                          Loading...
+                        <SelectItem value="no-categories" disabled>
+                          No parent categories available
                         </SelectItem>
                       )}
                     </SelectContent>
                   </Select>
+                  {categoriesLoadError ? (
+                    <p className="mt-2 text-xs text-[#EA580C]">
+                      {categoriesLoadError}. Close and reopen the dialog to retry.
+                    </p>
+                  ) : null}
                   <Label className="text-[#6B7280] mt-4 block">
                     Subcategory (Optional)
                   </Label>
@@ -2139,21 +2142,37 @@ export function ProductMaster() {
                 </div>
                 <div>
                   <Label>Barcode (EAN-13)</Label>
-                  <Input
-                    placeholder="4987654321123"
-                    className="mt-2 border-[#111827]/10"
-                    inputMode="numeric"
-                    maxLength={13}
-                    value={formData.barcode}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        barcode: sanitizeBarcodeInput(
-                          e.target.value,
-                        ),
-                      })
-                    }
-                  />
+                  <div className="mt-2 flex gap-2 items-center">
+                    <Input
+                      placeholder="Auto-generated EAN-13"
+                      className="border-[#111827]/10 font-mono tracking-widest"
+                      inputMode="numeric"
+                      maxLength={13}
+                      value={formData.barcode}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          barcode: sanitizeBarcodeInput(
+                            e.target.value,
+                          ),
+                        })
+                      }
+                    />
+                    <button
+                      type="button"
+                      title="Generate a new internal EAN-13 barcode"
+                      onClick={() =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          barcode: generateSystemEan13(Date.now().toString().slice(-9)),
+                        }))
+                      }
+                      className="flex-shrink-0 rounded-md border border-[#111827]/15 bg-white px-3 py-2 text-sm font-medium text-[#111827] shadow-sm transition-colors hover:bg-[#F3F4F6] active:scale-95"
+                    >
+                      <RefreshCw className="w-4 h-4 text-[#4B5563]" />
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[10px] text-[#6B7280]">Internal EAN-13 auto-generated. Click <RefreshCw className="inline-block w-3 h-3 mx-0.5 text-[#4B5563]" /> to regenerate or type a manufacturer barcode.</p>
                 </div>
                 <div>
                   <Label>Unit</Label>
@@ -2177,43 +2196,69 @@ export function ProductMaster() {
                 </div>
                 <div>
                   <Label>Supplier</Label>
-                  <Input
-                    placeholder="Enter supplier name"
-                    className="mt-2 border-[#111827]/10"
+                  <Select
                     value={formData.supplier}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        supplier: e.target.value,
-                      })
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, supplier: value })
                     }
-                  />
+                  >
+                    <SelectTrigger className="mt-2 border-[#111827]/10">
+                      <SelectValue placeholder="Select supplier" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {suppliers.map((s) => (
+                        <SelectItem key={s.id} value={s.supplier_name}>
+                          {s.supplier_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>Warehouse Location</Label>
-                  <Input
-                    placeholder="Zone A-01"
-                    className="mt-2 border-[#111827]/10"
+                  <Select
                     value={formData.location}
-                    onChange={(e) =>
+                    onValueChange={(value) =>
                       setFormData({
                         ...formData,
-                        location: e.target.value,
+                        location: value,
                       })
                     }
-                  />
+                  >
+                    <SelectTrigger className="mt-2 border-[#111827]/10">
+                      <SelectValue placeholder="Select location" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {locationOptions.map((loc) => (
+                        <SelectItem key={loc.value} value={loc.value}>
+                          {loc.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>Cost Price</Label>
                   <Input
                     type="number"
+                    min="0"
+                    step="0.01"
+                    inputMode="decimal"
                     placeholder="0.00"
                     className="mt-2 border-[#111827]/10"
                     value={formData.costPrice}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        costPrice: e.target.value,
+                        costPrice: sanitizeDecimalInput(
+                          e.target.value,
+                          2,
+                        ),
+                      })
+                    }
+                    onKeyDown={(e) =>
+                      blockInvalidNumberKeys(e, {
+                        allowDecimal: true,
                       })
                     }
                   />
@@ -2222,13 +2267,24 @@ export function ProductMaster() {
                   <Label>Unit Price</Label>
                   <Input
                     type="number"
+                    min="0"
+                    step="0.01"
+                    inputMode="decimal"
                     placeholder="0.00"
                     className="mt-2 border-[#111827]/10"
                     value={formData.unitPrice}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        unitPrice: e.target.value,
+                        unitPrice: sanitizeDecimalInput(
+                          e.target.value,
+                          2,
+                        ),
+                      })
+                    }
+                    onKeyDown={(e) =>
+                      blockInvalidNumberKeys(e, {
+                        allowDecimal: true,
                       })
                     }
                   />
@@ -2266,14 +2322,22 @@ export function ProductMaster() {
                   <Input
                     type="number"
                     min="0"
+                    step="1"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     placeholder="0"
                     className="mt-2 border-[#111827]/10"
                     value={formData.currentStock}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        currentStock: e.target.value,
+                        currentStock: sanitizeIntegerInput(
+                          e.target.value,
+                        ),
                       })
+                    }
+                    onKeyDown={(e) =>
+                      blockInvalidNumberKeys(e)
                     }
                   />
                 </div>
@@ -2761,10 +2825,10 @@ export function ProductMaster() {
                           const marginPercent =
                             sellingPrice > 0
                               ? roundMoney(
-                                  ((sellingPrice - costPrice) /
-                                    sellingPrice) *
-                                    100,
-                                )
+                                ((sellingPrice - costPrice) /
+                                  sellingPrice) *
+                                100,
+                              )
                               : 0;
                           const previousRecord =
                             previousPricingByRecordId.get(
@@ -2788,8 +2852,8 @@ export function ProductMaster() {
                               <td className="py-3 px-4 text-[#111827]">
                                 {snapshot.effective_from
                                   ? new Date(
-                                      snapshot.effective_from,
-                                    ).toLocaleDateString()
+                                    snapshot.effective_from,
+                                  ).toLocaleDateString()
                                   : "-"}
                               </td>
                               <td className="py-3 px-4 font-mono text-[#00A3AD] font-semibold">
@@ -2802,14 +2866,14 @@ export function ProductMaster() {
                                 {formatMoney(
                                   costPrice,
                                   snapshot.currency_code ||
-                                    "PHP",
+                                  "PHP",
                                 )}
                               </td>
                               <td className="py-3 px-4 text-right text-[#111827]">
                                 {formatMoney(
                                   sellingPrice,
                                   snapshot.currency_code ||
-                                    "PHP",
+                                  "PHP",
                                 )}
                               </td>
                               <td className="py-3 px-4 text-sm">
@@ -3092,41 +3156,68 @@ export function ProductMaster() {
             </div>
             <div>
               <Label>Supplier</Label>
-              <Input
-                className="mt-2 border-[#111827]/10"
+              <Select
                 value={editFormData.supplier}
-                onChange={(e) =>
-                  setEditFormData({
-                    ...editFormData,
-                    supplier: e.target.value,
-                  })
+                onValueChange={(value) =>
+                  setEditFormData({ ...editFormData, supplier: value })
                 }
-              />
+              >
+                <SelectTrigger className="mt-2 border-[#111827]/10">
+                  <SelectValue placeholder="Select supplier" />
+                </SelectTrigger>
+                <SelectContent>
+                  {suppliers.map((s) => (
+                    <SelectItem key={s.id} value={s.supplier_name}>
+                      {s.supplier_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label>Warehouse Location</Label>
-              <Input
-                className="mt-2 border-[#111827]/10"
+              <Select
                 value={editFormData.location}
-                onChange={(e) =>
+                onValueChange={(value) =>
                   setEditFormData({
                     ...editFormData,
-                    location: e.target.value,
+                    location: value,
                   })
                 }
-              />
+              >
+                <SelectTrigger className="mt-2 border-[#111827]/10">
+                  <SelectValue placeholder="Select location" />
+                </SelectTrigger>
+                <SelectContent>
+                  {locationOptions.map((loc) => (
+                    <SelectItem key={loc.value} value={loc.value}>
+                      {loc.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label>Cost Price</Label>
               <Input
                 type="number"
                 min="0"
+                step="0.01"
+                inputMode="decimal"
                 className="mt-2 border-[#111827]/10"
                 value={editFormData.costPrice}
                 onChange={(e) =>
                   setEditFormData({
                     ...editFormData,
-                    costPrice: e.target.value,
+                    costPrice: sanitizeDecimalInput(
+                      e.target.value,
+                      2,
+                    ),
+                  })
+                }
+                onKeyDown={(e) =>
+                  blockInvalidNumberKeys(e, {
+                    allowDecimal: true,
                   })
                 }
               />
@@ -3136,12 +3227,22 @@ export function ProductMaster() {
               <Input
                 type="number"
                 min="0"
+                step="0.01"
+                inputMode="decimal"
                 className="mt-2 border-[#111827]/10"
                 value={editFormData.unitPrice}
                 onChange={(e) =>
                   setEditFormData({
                     ...editFormData,
-                    unitPrice: e.target.value,
+                    unitPrice: sanitizeDecimalInput(
+                      e.target.value,
+                      2,
+                    ),
+                  })
+                }
+                onKeyDown={(e) =>
+                  blockInvalidNumberKeys(e, {
+                    allowDecimal: true,
                   })
                 }
               />
@@ -3174,13 +3275,21 @@ export function ProductMaster() {
               <Input
                 type="number"
                 min="0"
+                step="1"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 className="mt-2 border-[#111827]/10"
                 value={editFormData.currentStock}
                 onChange={(e) =>
                   setEditFormData({
                     ...editFormData,
-                    currentStock: e.target.value,
+                    currentStock: sanitizeIntegerInput(
+                      e.target.value,
+                    ),
                   })
+                }
+                onKeyDown={(e) =>
+                  blockInvalidNumberKeys(e)
                 }
               />
             </div>
@@ -3283,181 +3392,7 @@ export function ProductMaster() {
         </DialogContent>
       </Dialog>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="bg-white border-[#111827]/10">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-[#00A3AD]/10 flex items-center justify-center">
-                <Package className="w-6 h-6 text-[#00A3AD]" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-[#111827]">
-                  {products.length}
-                </div>
-                <div className="text-sm text-[#6B7280]">
-                  Total Products
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-white border-[#111827]/10">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-[#1A2B47]/10 flex items-center justify-center">
-                <Barcode className="w-6 h-6 text-[#1A2B47]" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-[#111827]">
-                  {products.length}
-                </div>
-                <div className="text-sm text-[#6B7280]">
-                  Unique SKUs
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-white border-[#111827]/10">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-[#F97316]/10 flex items-center justify-center">
-                <Package className="w-6 h-6 text-[#F97316]" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-[#F97316]">
-                  {
-                    products.filter((p) => p.currentStock <= 0)
-                      .length
-                  }
-                </div>
-                <div className="text-sm text-[#6B7280]">
-                  Out of Stock Items
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-white border-[#111827]/10">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg bg-[#0891B2]/10 flex items-center justify-center">
-                <Package className="w-6 h-6 text-[#0891B2]" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-[#111827]">
-                  {products
-                    .filter(
-                      (p) => p.category_id === "cold_chain",
-                    )
-                    .reduce(
-                      (sum, p) => sum + p.currentStock,
-                      0,
-                    )}
-                </div>
-                <div className="text-sm text-[#6B7280]">
-                  Cold Chain Units
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
 
-      <Card className="bg-[#1A2B47] border-[#00A3AD] shadow-xl">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-white font-bold">
-              Developer Debug Panel - Live API Monitor
-            </CardTitle>
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-white/20 text-white hover:bg-white/10"
-              onClick={() => setShowDebugPanel(!showDebugPanel)}
-            >
-              {showDebugPanel ? "Hide" : "Show"} Debug Panel
-            </Button>
-          </div>
-          <p className="text-white/60 text-sm mt-2">
-            Real-time monitoring of API requests, payloads, and
-            responses
-          </p>
-        </CardHeader>
-        {showDebugPanel && (
-          <CardContent className="space-y-4">
-            <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-              <div className="text-xs text-white/60 mb-1">
-                SUPABASE REST API ENDPOINT
-              </div>
-              <div className="text-sm text-white font-mono break-all">
-                https://{projectId}.supabase.co/rest/v1/products
-              </div>
-            </div>
-            <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-              <div className="text-xs text-white/60 mb-2">
-                LAST PAYLOAD SENT
-              </div>
-              {lastPayload ? (
-                <pre className="text-xs text-[#00A3AD] font-mono overflow-x-auto">
-                  {JSON.stringify(lastPayload, null, 2)}
-                </pre>
-              ) : (
-                <div className="text-sm text-white/40">
-                  No payload sent yet
-                </div>
-              )}
-            </div>
-            <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-              <div className="text-xs text-white/60 mb-2">
-                LAST API RESPONSE
-              </div>
-              {lastResponse ? (
-                <pre className="text-xs text-white font-mono overflow-x-auto">
-                  {JSON.stringify(lastResponse, null, 2)}
-                </pre>
-              ) : (
-                <div className="text-sm text-white/40">
-                  No response received yet
-                </div>
-              )}
-            </div>
-            <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-              <div className="text-xs text-white/60 mb-2">
-                ACTIVITY LOG
-              </div>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {debugLogs.length > 0 ? (
-                  debugLogs.slice(0, 10).map((log, idx) => (
-                    <div
-                      key={idx}
-                      className="text-xs font-mono"
-                    >
-                      <span
-                        className={`inline-block px-2 py-1 rounded mr-2 ${log.type === "error" ? "bg-[#F97316] text-white" : log.type === "success" ? "bg-[#00A3AD] text-white" : "bg-white/10 text-white"}`}
-                      >
-                        {log.type.toUpperCase()}
-                      </span>
-                      <span className="text-xs text-white/60">
-                        {new Date(
-                          log.timestamp,
-                        ).toLocaleTimeString()}
-                      </span>
-                      <span className="text-white ml-2">
-                        {log.message}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-sm text-white/40">
-                    No activity logged yet
-                  </div>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        )}
-      </Card>
     </div>
   );
 }

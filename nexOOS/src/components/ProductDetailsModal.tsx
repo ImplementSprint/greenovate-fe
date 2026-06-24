@@ -4,23 +4,17 @@ import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, CheckCircle2, Plus } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import { Product } from '../types';
+import { fetchJsonWithRetry } from '@/lib/api';
+import { getAccessToken } from '@/lib/auth-client';
+import { getAvailableStock, normalizeProducts } from '@/lib/product-utils';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
-
-const getAvailableStock = (
-  selectedStock: number | undefined,
-  fallbackStock: number | undefined
-) => {
-  if (typeof selectedStock === 'number') {
-    return selectedStock;
-  }
-
-  return fallbackStock ?? 0;
-};
 
 const renderStockAvailability = (
   selectedBranch: unknown,
   hasStock: boolean,
-  stock: number
+  stock: number,
+  sold?: number,
 ) => {
   if (!selectedBranch) {
     return <span className="text-sm text-slate-500">Select a branch to view stock availability.</span>;
@@ -31,7 +25,9 @@ const renderStockAvailability = (
       <div className="flex items-center gap-2 text-blue-600 bg-blue-50 px-3 py-2 rounded-lg inline-flex">
         <CheckCircle2 className="w-5 h-5" />
         <span className="font-medium">In Stock</span>
-        <span className="text-sm opacity-80">({stock} items available)</span>
+        {typeof sold === 'number' && (
+          <span className="text-sm opacity-80">({sold} sold)</span>
+        )}
       </div>
     );
   }
@@ -44,15 +40,69 @@ const renderStockAvailability = (
   );
 };
 
+function ProductSuggestionCard({
+  product,
+  idx,
+  label,
+  labelClassName,
+  isOutOfStock,
+  onSelect,
+}: Readonly<{
+  product: Product;
+  idx: number;
+  label: string;
+  labelClassName: string;
+  isOutOfStock: boolean;
+  onSelect: (product: Product) => void;
+}>) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: idx * 0.05 }}
+      className="group overflow-hidden rounded-[1.5rem] border border-blue-100 bg-white shadow-sm transition-all hover:-translate-y-1 hover:shadow-xl"
+    >
+      <button type="button" onClick={() => onSelect(product)} className="block w-full text-left">
+        <div className="aspect-square overflow-hidden bg-slate-50">
+          <img
+            src={product.image}
+            alt={product.name}
+            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+        <div className="p-4">
+          <span className={`mb-2 inline-flex rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wider ${labelClassName}`}>
+            {label}
+          </span>
+          <h4 className="line-clamp-2 min-h-[2.8rem] text-sm font-black tracking-tight text-slate-900">
+            {product.name}
+          </h4>
+          <p className="mt-1 text-lg font-black text-slate-900">PHP {product.price.toFixed(2)}</p>
+          <p className={`mt-2 text-xs font-bold ${isOutOfStock ? 'text-red-500' : 'text-slate-500'}`}>
+            {isOutOfStock ? 'Out of stock in this branch' : 'Tap to view details'}
+          </p>
+        </div>
+      </button>
+    </motion.div>
+  );
+}
+
 export default function ProductDetailsModal() {
-  const { 
+  const {
     selectedProduct, setSelectedProduct,
     isLoggedIn, setView,
     addToCart,
     selectedBranch,
-    branchInventory
+    branchInventory,
+    categoryInterestMap,
   } = useAppContext();
   const [addedProductName, setAddedProductName] = useState('');
+  const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
+  const [isLoadingRelated, setIsLoadingRelated] = useState(false);
+  const [relatedError, setRelatedError] = useState('');
+  const [recommendations, setRecommendations] = useState<Product[]>([]);
+  const [isLoadingRecs, setIsLoadingRecs] = useState(false);
 
   useBodyScrollLock(Boolean(selectedProduct) || Boolean(addedProductName));
 
@@ -68,6 +118,99 @@ export default function ProductDetailsModal() {
     return () => globalThis.clearTimeout(timeout);
   }, [addedProductName]);
 
+  useEffect(() => {
+    if (!selectedProduct) {
+      setRecommendations([]);
+      setIsLoadingRecs(false);
+      return;
+    }
+
+    // Record this view in DB for cross-device personalization
+    const token = getAccessToken();
+    if (token) {
+      fetch('/api/product-view', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ productId: selectedProduct.id, category: selectedProduct.category }),
+      }).catch(() => {});
+    }
+
+    const ctrl = new AbortController();
+    setIsLoadingRecs(true);
+
+    fetchJsonWithRetry<{ data?: Product[] }>(
+      `/api/products/${selectedProduct.id}/recommendations?limit=4`,
+      { signal: ctrl.signal },
+    )
+      .then((payload) => {
+        const recs = normalizeProducts(payload?.data ?? []);
+        // Re-rank by user's category interest — Shopee-style
+        if (categoryInterestMap.size > 0) {
+          recs.sort((a, b) => (categoryInterestMap.get(b.category) ?? 0) - (categoryInterestMap.get(a.category) ?? 0));
+        }
+        setRecommendations(recs);
+      })
+      .catch(() => setRecommendations([]))
+      .finally(() => { if (!ctrl.signal.aborted) setIsLoadingRecs(false); });
+
+    return () => ctrl.abort();
+  }, [categoryInterestMap, selectedProduct]);
+
+  useEffect(() => {
+    if (!selectedProduct) {
+      setRelatedProducts([]);
+      setRelatedError('');
+      setIsLoadingRelated(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const loadRelatedProducts = async () => {
+      try {
+        setIsLoadingRelated(true);
+        setRelatedError('');
+
+        const params = new URLSearchParams({
+          category: selectedProduct.category,
+          limit: '8',
+          sortBy: 'popularity',
+        });
+
+        if (selectedBranch) {
+          params.set('branchId', String(selectedBranch.id));
+        }
+
+        const payload = await fetchJsonWithRetry<{ data?: Product[] }>(
+          `/api/products?${params.toString()}`,
+          { signal: controller.signal },
+        );
+
+        const nextProducts = normalizeProducts(payload?.data ?? [])
+          .filter((product) => product.id !== selectedProduct.id)
+          .slice(0, 4);
+
+        setRelatedProducts(nextProducts);
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') {
+          return;
+        }
+
+        console.error('Related products fetch failed:', error);
+        setRelatedProducts([]);
+        setRelatedError('Unable to load related products right now.');
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoadingRelated(false);
+        }
+      }
+    };
+
+    loadRelatedProducts();
+
+    return () => controller.abort();
+  }, [selectedBranch, selectedProduct]);
+
   if (!selectedProduct) return null;
 
   const inventoryItem = selectedBranch ? branchInventory.find(inv => inv.product_id === selectedProduct.id) : null;
@@ -77,10 +220,10 @@ export default function ProductDetailsModal() {
   return (
     <AnimatePresence>
       {selectedProduct && (
-        <>
+        <React.Fragment key={`product-modal-${selectedProduct.id || selectedProduct.name}`}>
           <AnimatePresence>
             {addedProductName && (
-              <>
+              <React.Fragment key={`product-added-${selectedProduct.id || selectedProduct.name}`}>
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -104,7 +247,7 @@ export default function ProductDetailsModal() {
                     <p className="text-slate-500 font-medium">{addedProductName}</p>
                   </div>
                 </motion.div>
-              </>
+              </React.Fragment>
             )}
           </AnimatePresence>
 
@@ -148,8 +291,8 @@ export default function ProductDetailsModal() {
                       <button className="w-20 h-20 shrink-0 rounded-xl overflow-hidden border-2 border-blue-500">
                         <img src={selectedProduct.image} alt="Thumbnail" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                       </button>
-                      {selectedProduct.images.map((img) => (
-                        <button key={`${selectedProduct.id}-${img}`} className="w-20 h-20 shrink-0 rounded-xl overflow-hidden border-2 border-transparent hover:border-slate-300 transition-colors">
+                      {selectedProduct.images.map((img, idx) => (
+                        <button key={`${selectedProduct.id}-img-${idx}`} className="w-20 h-20 shrink-0 rounded-xl overflow-hidden border-2 border-transparent hover:border-slate-300 transition-colors">
                           <img src={img} alt={`Thumbnail for ${selectedProduct.name}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                         </button>
                       ))}
@@ -168,7 +311,7 @@ export default function ProductDetailsModal() {
                     
                     {/* Stock Availability */}
                     <div className="mb-6">
-                      {renderStockAvailability(selectedBranch, hasStock, stock)}
+                      {renderStockAvailability(selectedBranch, hasStock, stock, selectedProduct.sold)}
                     </div>
 
                     <p className="text-slate-600 leading-relaxed mb-8">
@@ -181,7 +324,7 @@ export default function ProductDetailsModal() {
                         <h3 className="text-lg font-bold text-slate-900 mb-4">Specifications</h3>
                         <div className="bg-slate-50 rounded-xl border border-slate-100 overflow-hidden">
                           {Object.entries(selectedProduct.specifications).map(([key, value], idx) => (
-                            <div key={key} className={`flex px-4 py-3 ${idx === 0 ? '' : 'border-t border-slate-100'}`}>
+                            <div key={`${key}-${idx}`} className={`flex px-4 py-3 ${idx === 0 ? '' : 'border-t border-slate-100'}`}>
                               <span className="w-1/3 text-sm font-medium text-slate-500">{key}</span>
                               <span className="w-2/3 text-sm text-slate-900">{value}</span>
                             </div>
@@ -235,9 +378,96 @@ export default function ProductDetailsModal() {
                   </div>
                 </div>
               </div>
+
+              {(isLoadingRecs || recommendations.length > 0) && (
+                <div className="mt-10 border-t border-slate-100 pt-8">
+                  <div className="mb-5">
+                    <h3 className="text-2xl font-black text-slate-900 tracking-tight">Frequently Bought Together</h3>
+                    <p className="text-sm text-slate-500">Customers who bought this also bought these.</p>
+                  </div>
+
+                  {isLoadingRecs && (
+                    <div className="rounded-3xl border border-slate-200 bg-slate-50 px-6 py-8 text-center text-slate-500">
+                      Analyzing purchase patterns...
+                    </div>
+                  )}
+
+                  {!isLoadingRecs && recommendations.length > 0 && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                      {recommendations.map((product, idx) => {
+                        const invItem = selectedBranch ? branchInventory.find((inv) => inv.product_id === product.id) : null;
+                        const recStock = getAvailableStock(product.stock, invItem?.stock);
+                        return (
+                          <ProductSuggestionCard
+                            key={`rec-${product.id}-${idx}`}
+                            product={product}
+                            idx={idx}
+                            label="Often paired"
+                            labelClassName="bg-green-50 text-green-600"
+                            isOutOfStock={Boolean(selectedBranch && recStock === 0)}
+                            onSelect={setSelectedProduct}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-10 border-t border-slate-100 pt-8">
+                <div className="mb-5 flex items-end justify-between gap-4">
+                  <div>
+                    <h3 className="text-2xl font-black text-slate-900 tracking-tight">You May Also Like</h3>
+                    <p className="text-sm text-slate-500">
+                      Similar picks from the same category.
+                    </p>
+                  </div>
+                </div>
+
+                {isLoadingRelated && (
+                  <div className="rounded-3xl border border-slate-200 bg-slate-50 px-6 py-8 text-center text-slate-500">
+                    Loading related products...
+                  </div>
+                )}
+
+                {!isLoadingRelated && relatedError && (
+                  <div className="rounded-3xl border border-red-100 bg-red-50 px-6 py-8 text-center text-red-600">
+                    {relatedError}
+                  </div>
+                )}
+
+                {!isLoadingRelated && !relatedError && relatedProducts.length === 0 && (
+                  <div className="rounded-3xl border border-slate-200 bg-slate-50 px-6 py-8 text-center text-slate-500">
+                    No related products available yet.
+                  </div>
+                )}
+
+                {!isLoadingRelated && !relatedError && relatedProducts.length > 0 && (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    {relatedProducts.map((product, idx) => {
+                      const relatedInventoryItem = selectedBranch
+                        ? branchInventory.find((inv) => inv.product_id === product.id)
+                        : null;
+                      const relatedStock = getAvailableStock(product.stock, relatedInventoryItem?.stock);
+
+                      return (
+                        <ProductSuggestionCard
+                          key={`${product.id}-${product.name}-${idx}`}
+                          product={product}
+                          idx={idx}
+                          label={product.category}
+                          labelClassName="bg-blue-50 text-blue-600"
+                          isOutOfStock={Boolean(selectedBranch && relatedStock === 0)}
+                          onSelect={setSelectedProduct}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </motion.div>
-        </>
+        </React.Fragment>
       )}
     </AnimatePresence>
   );

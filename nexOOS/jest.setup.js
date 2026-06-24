@@ -1,5 +1,8 @@
 require('@testing-library/jest-dom');
 
+// auth.ts refuses to sign/verify without a real JWT secret; provide one for tests.
+process.env.OOS_FRONTEND_JWT_SECRET = process.env.OOS_FRONTEND_JWT_SECRET || 'test-jwt-secret';
+
 const { TextDecoder, TextEncoder } = require('util');
 const {
   ReadableStream,
@@ -27,25 +30,15 @@ if (!global.WritableStream) {
   global.WritableStream = WritableStream;
 }
 
-const {
-  fetch,
-  Headers,
-  Request,
-  Response,
-} = require('next/dist/compiled/@edge-runtime/primitives/fetch');
-
-if (!global.fetch) {
-  global.fetch = fetch;
-}
-
-if (!global.Headers) {
-  global.Headers = Headers;
-}
-
-if (!global.Request) {
-  global.Request = Request;
-}
-
-if (!global.Response) {
-  global.Response = Response;
+// Next.js 16+ restructured its internal compiled paths. Wrap in try/catch so the
+// setup does not throw MODULE_NOT_FOUND if the path moves again. Node 18+ and
+// jest-environment-jsdom 30 already provide native fetch globally as a fallback.
+try {
+  const p = require('next/dist/compiled/@edge-runtime/primitives/fetch');
+  if (!global.fetch) global.fetch = p.fetch;
+  if (!global.Headers) global.Headers = p.Headers;
+  if (!global.Request) global.Request = p.Request;
+  if (!global.Response) global.Response = p.Response;
+} catch {
+  // native fetch available via Node 18+ / jsdom — no polyfill required
 }

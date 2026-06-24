@@ -113,4 +113,49 @@ describe("parseCSVString", () => {
 
     parseSpy.mockRestore();
   });
+
+  it("captures parser errors that omit a row number during file parsing", async () => {
+    const parseSpy = jest
+      .spyOn(Papa, "parse")
+      .mockImplementation((_input, config) => {
+        if (
+          config &&
+          typeof config === "object" &&
+          "complete" in config &&
+          typeof config.complete === "function"
+        ) {
+          config.complete({
+            data: [{ sku: "SKU-001", qty: "3" }],
+            errors: [{ message: "Malformed quote" }] as never[],
+            meta: { fields: ["sku", "qty"] },
+          } as ReturnType<(typeof config)["complete"]> extends void ? never : never);
+        }
+
+        return {} as ReturnType<typeof Papa.parse>;
+      });
+
+    const file = new File(["sku,qty\nSKU-001,3\n"], "quoted.csv", {
+      type: "text/csv",
+    });
+
+    await expect(parseCSVFile(file)).resolves.toMatchObject({
+      data: [{ sku: "SKU-001", qty: 3 }],
+      skippedRows: 0,
+      errors: ['Row ??: Malformed quote'],
+    });
+
+    parseSpy.mockRestore();
+  });
+
+  it("reports invalid numeric values during file parsing", async () => {
+    const file = new File(["sku,qty\nSKU-001,nope\nSKU-002,4\n"], "bad.csv", {
+      type: "text/csv",
+    });
+
+    await expect(parseCSVFile(file)).resolves.toMatchObject({
+      data: [{ sku: "SKU-002", qty: 4 }],
+      skippedRows: 1,
+      errors: ['Row 2: skipped — QTY "nope" is not a valid number (SKU: SKU-001)'],
+    });
+  });
 });

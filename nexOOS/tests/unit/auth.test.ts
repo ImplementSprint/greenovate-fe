@@ -62,7 +62,8 @@ describe('auth token helpers', () => {
   });
 
   it('returns null when jwt verification resolves to a string payload', () => {
-    jest.spyOn(jwt, 'verify').mockReturnValue('plain-string' as jwt.JwtPayload & string);
+    (jest.spyOn(jwt, 'verify') as unknown as jest.SpyInstance<jwt.JwtPayload | string>)
+      .mockReturnValue('plain-string');
 
     expect(verifyAccessToken('string-payload-token')).toBeNull();
     expect(verifyRefreshToken('string-payload-token')).toBeNull();

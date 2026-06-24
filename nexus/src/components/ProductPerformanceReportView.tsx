@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { Trophy, CircleDollarSign, TriangleAlert } from 'lucide-react';
-import { supabase } from '../supabaseClient';
+import { salesApi } from '../services/salesApi';
 import { formatCurrency } from '../utils/numberformatters';
 import { Transaction } from '../utils/chartHelpers';
 import './ProductPerformanceReportView.css';
@@ -14,6 +14,7 @@ interface TransactionItem {
   line_total: number;
   unit_price?: number;
   created_at?: string;
+  transaction_id?: string;
 }
 
 interface ProductStats {
@@ -45,26 +46,13 @@ const ProductPerformanceReportView: React.FC<Props> = ({ transactions }) => {
       sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
       const startDate = sixtyDaysAgo.toISOString();
 
-      const { data, error } = await supabase
-        .from('transaction_items')
-        .select('name, category, quantity, line_total, created_at, unit_price')
-        .gte('created_at', startDate);
-
-      if (error) throw error;
-
+      const result = await salesApi.fetchTransactionItems(startDate);
+      const dbItems = result.items || [];
+      
       const dbTxnIds = new Set<string>();
-      try {
-        const localTxnIds = transactions.map((t) => t.id).filter((id) => id.length > 0);
-        if (localTxnIds.length > 0) {
-          const { data: dbTxns } = await supabase
-            .from('transactions')
-            .select('id')
-            .in('id', localTxnIds.slice(0, 100));
-          (dbTxns || []).forEach((r: any) => dbTxnIds.add(r.id));
-        }
-      } catch (err) {
-        console.warn('Silent skip: failed to check dbTxnIds', err);
-      }
+      dbItems.forEach((item: any) => {
+        if (item.transaction_id) dbTxnIds.add(item.transaction_id);
+      });
 
       const localItems: TransactionItem[] = [];
       transactions.forEach((txn) => {
@@ -87,8 +75,6 @@ const ProductPerformanceReportView: React.FC<Props> = ({ transactions }) => {
           });
         });
       });
-
-      const dbItems = (data || []) as TransactionItem[];
 
       setItems([...dbItems, ...localItems]);
     } catch (err) {
