@@ -54,7 +54,7 @@ export function LoginPage() {
         if (loginResult.authMode === 'supabase') {
           clearStoredAuth();
         }
-        localStorage.setItem('user_id', loginResult.userId ?? '');
+        localStorage.removeItem('user_id');
         const resolvedRole = await getRoleFromSession();
         if (!resolvedRole || resolvedRole !== loginRole) {
           await supabase.auth.signOut();
