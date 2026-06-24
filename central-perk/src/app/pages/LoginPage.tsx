@@ -55,7 +55,6 @@ export function LoginPage() {
           clearStoredAuth();
         }
         localStorage.setItem('user_id', loginResult.userId ?? '');
-
         const resolvedRole = await getRoleFromSession();
         if (!resolvedRole || resolvedRole !== loginRole) {
           await supabase.auth.signOut();
