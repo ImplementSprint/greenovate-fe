@@ -54,7 +54,6 @@ export function LoginPage() {
         if (loginResult.authMode === 'supabase') {
           clearStoredAuth();
         }
-        localStorage.setItem('token', loginResult.accessToken);
         localStorage.setItem('user_id', loginResult.userId ?? '');
 
         const resolvedRole = await getRoleFromSession();
